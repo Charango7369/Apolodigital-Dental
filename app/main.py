@@ -14,6 +14,10 @@ from app.middlewares.error_middleware import ErrorHandlingMiddleware
 from app.db.base import Base
 from app.db.session import engine
 
+# --- AGREGA ESTA LÍNEA AQUÍ ---
+import app.models 
+# ------------------------------
+
 from app.modules.auth.router import router as auth_router
 from app.modules.users.router import router as users_router
 from app.modules.patients.router import router as patients_router
@@ -26,6 +30,7 @@ from app.modules.reports.router import router as reports_router
 from app.modules.files.router import router as files_router
 from app.modules.tenants.router import router as tenants_router
 
+# ... el resto del código sigue igual ...
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
