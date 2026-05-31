@@ -1,24 +1,19 @@
+import os
 from sqlalchemy import create_engine
-from sqlalchemy.orm import sessionmaker, declarative_base
-from app.core.config import settings
+from sqlalchemy.ext.declarative import declarative_base
+from sqlalchemy.orm import sessionmaker
 
-# Aseguramos que si es sqlite, no sea aiosqlite
-db_url = settings.DB_URL
-if db_url.startswith("sqlite+aiosqlite"):
-    db_url = db_url.replace("sqlite+aiosqlite", "sqlite")
+# Usar variable de entorno DATABASE_URL de Railway
+DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./dental.db")
 
-engine = create_engine(
-    db_url,
-    connect_args={"check_same_thread": False} if "sqlite" in db_url else {}
-)
+# Detectar si es SQLite o PostgreSQL
+if DATABASE_URL.startswith("sqlite"):
+    engine = create_engine(
+        DATABASE_URL,
+        connect_args={"check_same_thread": False}
+    )
+else:
+    engine = create_engine(DATABASE_URL)
 
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
-
 Base = declarative_base()
-
-def get_db():
-    db = SessionLocal()
-    try:
-        yield db
-    finally:
-        db.close()
