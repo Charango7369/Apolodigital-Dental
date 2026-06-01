@@ -11,33 +11,10 @@ from app.modules.tenants.models import Tenant
 # Importar User (depende de Tenant por el TenantMixin)
 from app.modules.users.models import User
 
-# Importar el resto de modelos (ajusta los nombres de clase si son diferentes)
-try:
-    from app.modules.patients.models import Patient
-except ImportError:
-    pass
-
-try:
-    from app.modules.appointments.models import Appointment
-except ImportError:
-    pass
-
-try:
-    from app.modules.inventory.models import InventoryItem
-except ImportError:
-    pass
-
-try:
-    from app.modules.billing.models import Invoice
-except ImportError:
-    pass
-
-try:
-    from app.modules.odontogram.models import OdontogramEntry
-except ImportError:
-    pass
-
-try:
-    from app.modules.notifications.models import Notification
-except ImportError:
-    pass
+# Importaciones directas (si alguna falla, nos enteraremos inmediatamente en los logs)
+from app.modules.patients.models import Patient
+from app.modules.appointments.models import Appointment
+from app.modules.inventory.models import InventoryItem
+from app.modules.billing.models import Invoice
+from app.modules.odontogram.models import OdontogramEntry
+from app.modules.notifications.models import Notification
