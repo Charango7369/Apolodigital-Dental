@@ -1,19 +1,24 @@
-import os
-from sqlalchemy import create_engine
-from sqlalchemy.ext.declarative import declarative_base
-from sqlalchemy.orm import sessionmaker
+from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
+from app.core.config import settings # Asumiendo que tienes un archivo de config
 
-# Usar variable de entorno DATABASE_URL de Railway
-DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./dental.db")
+# 1. Crear el motor asíncrono
+engine = create_async_engine(
+    settings.DATABASE_URL, # Tu variable DB_URL de Railway
+    echo=False,
+    pool_pre_ping=True,
+)
 
-# Detectar si es SQLite o PostgreSQL
-if DATABASE_URL.startswith("sqlite"):
-    engine = create_engine(
-        DATABASE_URL,
-        connect_args={"check_same_thread": False}
-    )
-else:
-    engine = create_engine(DATABASE_URL)
+# 2. Crear la fábrica de sesiones
+AsyncSessionLocal = async_sessionmaker(
+    engine, 
+    class_=AsyncSession, 
+    expire_on_commit=False
+)
 
-SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
-Base = declarative_base()
+# 3. Definir la dependencia get_db
+async def get_db():
+    async with AsyncSessionLocal() as session:
+        try:
+            yield session
+        finally:
+            await session.close()
