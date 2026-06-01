@@ -40,8 +40,9 @@ async def lifespan(app: FastAPI):
 
     logger.info("🚀 Starting Dental SaaS Backend")
 
-    # Crear tablas automáticamente
-    Base.metadata.create_all(bind=engine)
+    # Crear tablas async
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
 
     yield
 
