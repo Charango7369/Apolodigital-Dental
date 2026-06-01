@@ -6,7 +6,7 @@ class Settings(BaseSettings):
     PROJECT_NAME: str = "Dental SaaS"
     ENVIRONMENT: str = "development"
 
-    DB_URL: str
+    DATABASE_URL: str
 
     JWT_SECRET: str
     JWT_REFRESH_SECRET: str
