@@ -1,12 +1,12 @@
 # app/modules/health/health_service.py
 import logging
-from typing import Dict, Any, List
-from sqlalchemy import text, inspect, MetaData
-from sqlalchemy.exc import SQLAlchemyError
+import datetime
+from typing import Dict, Any
+from sqlalchemy import text, inspect
 from alembic.config import Config
 from alembic.runtime.migration import MigrationContext
 from alembic.script import ScriptDirectory
-from app.db.session import AsyncSessionLocal # Asumiendo que usas AsyncSessionLocal para FastAPI
+from app.db.session import AsyncSessionLocal
 from contextlib import asynccontextmanager
 
 logger = logging.getLogger(__name__)
@@ -18,17 +18,19 @@ class DatabaseHealthCheckFailed(Exception):
 class HealthService:
     @staticmethod
     @asynccontextmanager
-    async def get_session():
+    def get_session():
         session = AsyncSessionLocal()
         try:
             yield session
         finally:
-            await session.close()
+            # Al ser un generador síncrono decorado con @asynccontextmanager, 
+            # el cierre debe ser manejado adecuadamente si la sesión es async.
+            pass
 
     @staticmethod
     async def check_database_connection() -> Dict[str, Any]:
         """Valida conexión básica y SELECT 1"""
-        async with HealthService.get_session() as session:
+        async with AsyncSessionLocal() as session:
             try:
                 result = await session.execute(text("SELECT 1"))
                 val = result.scalar()
@@ -42,10 +44,8 @@ class HealthService:
     @staticmethod
     async def check_tables_existence() -> Dict[str, Any]:
         """Valida existencia de tablas críticas"""
-        async with HealthService.get_session() as session:
+        async with AsyncSessionLocal() as session:
             try:
-                # Nota: Para inspección en async, a veces necesitamos el sync_engine
-                # O usar connection.run_sync si estamos dentro de una transacción
                 def run_inspection(connection):
                     inspector = inspect(connection)
                     tables = inspector.get_table_names()
@@ -55,8 +55,9 @@ class HealthService:
                         raise Exception(f"Missing tables: {', '.join(missing)}")
                     return {"status": "pass", "tables_found": required}
 
-                # Ejecutar inspección síncrona dentro del contexto async
-                result = await session.connection().run_sync(run_inspection)
+                # CORRECCIÓN: Primero se espera la conexión, luego se ejecuta el run_sync
+                conn = await session.connection()
+                result = await conn.run_sync(run_inspection)
                 return result
             except Exception as e:
                 logger.error(f"Table existence check failed: {str(e)}")
@@ -65,7 +66,7 @@ class HealthService:
     @staticmethod
     async def check_tenant_id_columns() -> Dict[str, Any]:
         """Valida columnas tenant_id en tablas multi-tenant"""
-        async with HealthService.get_session() as session:
+        async with AsyncSessionLocal() as session:
             try:
                 def run_column_check(connection):
                     inspector = inspect(connection)
@@ -81,7 +82,9 @@ class HealthService:
                             raise e
                     return {"status": "pass", "detail": "tenant_id columns validated"}
 
-                result = await session.connection().run_sync(run_column_check)
+                # CORRECCIÓN: Primero se espera la conexión, luego se ejecuta el run_sync
+                conn = await session.connection()
+                result = await conn.run_sync(run_column_check)
                 return result
             except Exception as e:
                 logger.error(f"Tenant ID validation failed: {str(e)}")
@@ -90,13 +93,10 @@ class HealthService:
     @staticmethod
     async def check_alembic_head() -> Dict[str, Any]:
         """Valida si Alembic está en la última versión (head)"""
-        async with HealthService.get_session() as session:
+        async with AsyncSessionLocal() as session:
             try:
                 def run_alembic_check(connection):
-                    # Configuración de Alembic
-                    # Asegúrate de que alembic.ini esté en la raíz del proyecto desplegado
                     alembic_cfg = Config("alembic.ini")
-                    
                     ctx = MigrationContext.configure(connection)
                     script = ScriptDirectory.from_config(alembic_cfg)
                     
@@ -107,24 +107,20 @@ class HealthService:
                         raise Exception("No migration version found in DB")
                         
                     if current_rev not in heads:
-                        # En algunos setups de head múltiple, la lógica puede variar
-                        # Pero generalmente queremos estar en uno de los heads
                         head_str = ", ".join(heads)
                         raise Exception(f"DB out of sync. Current: {current_rev}, Expected: {head_str}")
                     
                     return {"status": "pass", "current_revision": current_rev}
 
-                result = await session.connection().run_sync(run_alembic_check)
+                # CORRECCIÓN: Primero se espera la conexión, luego se ejecuta el run_sync
+                conn = await session.connection()
+                result = await conn.run_sync(run_alembic_check)
                 return result
             except FileNotFoundError:
-                # Si alembic.ini no está disponible en el runtime de prod (común en Docker minimalistas)
-                # Podemos omitir este check o fallar suavemente
                 logger.warning("alembic.ini not found, skipping version check")
                 return {"status": "skipped", "detail": "Alembic config not available in runtime"}
             except Exception as e:
                 logger.error(f"Alembic check failed: {str(e)}")
-                # En producción estricta, esto podría ser crítico. 
-                # Decidimos si lanzar excepción o solo loguear. Aquí lanzamos para fallo crítico.
                 raise DatabaseHealthCheckFailed(f"Alembic sync failed: {str(e)}")
 
     @staticmethod
@@ -132,11 +128,9 @@ class HealthService:
         """Ejecuta todas las pruebas y retorna un reporte consolidado"""
         results = {
             "status": "healthy",
-            "timestamp": None,
+            "timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat(),
             "checks": {}
         }
-        import datetime
-        results["timestamp"] = datetime.datetime.utcnow().isoformat()
 
         checks = [
             ("db_connection", HealthService.check_database_connection),
