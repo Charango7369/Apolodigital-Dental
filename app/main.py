@@ -3,14 +3,14 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-from sqlalchemy import text  # <-- NUEVO: Para el ping de la base de datos
+from sqlalchemy import text
 
 from app.core.config import settings
 from app.core.logging import logger
 
 from app.middlewares.logging_middleware import LoggingMiddleware
 from app.middlewares.tenant_middleware import TenantMiddleware
-from app.middlewares.error_handling_middleware import ErrorHandlingMiddleware
+from app.middlewares.error_middleware import ErrorHandlingMiddleware  # <-- CORREGIDO AQUÍ
 
 from app.db.base import Base
 from app.db.session import engine
