@@ -3,14 +3,13 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-from sqlalchemy import text
 
 from app.core.config import settings
 from app.core.logging import logger
 
 from app.middlewares.logging_middleware import LoggingMiddleware
 from app.middlewares.tenant_middleware import TenantMiddleware
-from app.middlewares.error_middleware import ErrorHandlingMiddleware  # <-- CORREGIDO AQUÍ
+from app.middlewares.error_middleware import ErrorHandlingMiddleware
 
 from app.db.base import Base
 from app.db.session import engine
@@ -123,42 +122,6 @@ async def health_check():
             "status": "healthy",
         },
     }
-
-
-@app.get(
-    "/health/deep",
-    tags=["Health"],
-)
-async def deep_health_check():
-    """
-    Chequeo profundo que verifica la conectividad real con la Base de Datos.
-    """
-    db_status = "healthy"
-    try:
-        # Intentamos un ping rápido a la base de datos de Railway
-        async with engine.connect() as conn:
-            await conn.execute(text("SELECT 1"))
-    except Exception as e:
-        logger.error(f"💥 Deep Health Check fallido: {str(e)}")
-        db_status = "unreachable"
-
-    status_code = 200 if db_status == "healthy" else 500
-
-    return JSONResponse(
-        status_code=status_code,
-        content={
-            "success": db_status == "healthy",
-            "message": "Deep health check completed",
-            "data": {
-                "project": settings.PROJECT_NAME,
-                "environment": settings.ENVIRONMENT,
-                "status": "healthy" if db_status == "healthy" else "degraded",
-                "services": {
-                    "database": db_status
-                },
-            },
-        },
-    )
 
 
 # =========================================================
