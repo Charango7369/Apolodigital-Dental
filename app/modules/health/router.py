@@ -1,34 +1,30 @@
-# app/modules/health/router.py
-from fastapi import APIRouter, HTTPException, status
-from app.modules.health.health_service import HealthService, DatabaseHealthCheckFailed
+from fastapi import APIRouter, status, HTTPException
+from app.modules.health.health_service import run_full_smoke_test
 
+# El prefix debe ser "/health" para que la ruta final sea /health/deep
 router = APIRouter(prefix="/health", tags=["Health"])
 
 @router.get("/deep")
 async def deep_health_check():
     """
-    Prueba de humo completa de la base de datos.
-    Valida conexión, tablas, estructura multi-tenant y migraciones.
+    Ejecuta pruebas de humo completas (Smoke Tests) en el entorno de producción.
     """
     try:
-        report = await HealthService.run_full_smoke_test()
+        result = await run_full_smoke_test()
         
-        if report["status"] == "unhealthy":
-            # Retornar 503 Service Unavailable si algo falla
+        # Si alguna prueba falló, retornar 503 Service Unavailable
+        if not result.get("success"):
             raise HTTPException(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                detail=report
+                detail="Health check failed",
+                headers={"X-Health-Status": "unhealthy"}
             )
             
-        return report
+        return result
         
-    except DatabaseHealthCheckFailed as e:
+    except Exception as e:
+        # Error crítico al ejecutar las pruebas
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail={"error": "Database health check failed", "details": str(e)}
-        )
-    except Exception as e:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail={"error": "Internal server error during health check", "details": str(e)}
+            detail=f"Health check execution error: {str(e)}"
         )
