@@ -1,21 +1,21 @@
 # app/modules/users/schemas.py
 from pydantic import BaseModel, EmailStr
-from uuid import UUID  # 👈 Reimportamos UUID para el ID del usuario
+from uuid import UUID  # 👈 Usamos UUID para todo
 
 class UserCreate(BaseModel):
     full_name: str
     email: EmailStr
     password: str
     role: str
-    tenant_id: int  # 👈 Sigue siendo int porque la clínica usó el ID 2
+    tenant_id: UUID  # 👈 Cambiado a UUID
 
 
 class UserResponse(BaseModel):
-    id: UUID  # 👈 ¡CORREGIDO! El usuario genera un UUID (ej: "de305d54...")
+    id: UUID  # 👈 El usuario usa UUID
     full_name: str
     email: EmailStr
     role: str
-    tenant_id: int  # 👈 Sigue siendo int para emparejar con la clínica
+    tenant_id: UUID  # 👈 La clínica ahora también usará UUID
 
     model_config = {
         "from_attributes": True
