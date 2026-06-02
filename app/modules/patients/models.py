@@ -2,7 +2,7 @@
 from sqlalchemy import Column, Integer, String, ForeignKey
 from sqlalchemy.dialects.postgresql import UUID  # <-- Importamos el tipo UUID de PostgreSQL
 from sqlalchemy.orm import relationship
-from app.db.session import Base 
+from app.db.base import Base 
 
 class Patient(Base):
     __tablename__ = "patients"
