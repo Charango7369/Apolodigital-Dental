@@ -1,5 +1,6 @@
+# app/modules/users/models.py
 import uuid
-from sqlalchemy import String
+from sqlalchemy import String, Integer  # 👈 Añadimos 'Integer' aquí
 from sqlalchemy.orm import mapped_column, Mapped
 
 from app.db.base import Base
@@ -15,3 +16,5 @@ class User(Base, TimestampMixin, AuditMixin, TenantMixin):
     email: Mapped[str] = mapped_column(String(255), unique=True)
     hashed_password: Mapped[str] = mapped_column(String(255))
     role: Mapped[str] = mapped_column(String(50))
+
+    tenant_id: Mapped[int] = mapped_column(Integer, nullable=False)
