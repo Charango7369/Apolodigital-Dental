@@ -1,5 +1,6 @@
+# app/modules/users/router.py
 from fastapi import APIRouter, Depends
-from sqlalchemy.orm import Session
+from sqlalchemy.ext.asyncio import AsyncSession  # 👈 Cambiado para soportar asincronía
 
 from app.db.session import get_db
 from app.modules.users.schemas import UserCreate
@@ -10,8 +11,10 @@ router = APIRouter(prefix="/users", tags=["Users"])
 
 
 @router.post("/")
-def create_user(payload: UserCreate, db: Session = Depends(get_db)):
+async def create_user(payload: UserCreate, db: AsyncSession = Depends(get_db)):  # 👈 async y AsyncSession
     repository = UserRepository(db)
     service = UserService(repository)
 
-    return service.create_user(payload, tenant_id="demo")
+    # 👈 Agregamos 'await' porque el servicio ahora es asíncrono
+    # 👈 Reemplazamos "demo" por payload.tenant_id para recibir el ID real de la clínica
+    return await service.create_user(payload, tenant_id=payload.tenant_id)
