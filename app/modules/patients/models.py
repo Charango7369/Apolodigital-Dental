@@ -1,7 +1,7 @@
 # app/modules/patients/models.py
 from sqlalchemy import Column, Integer, String, ForeignKey
 from sqlalchemy.orm import relationship
-from app.db.base_class import Base  # <-- Ajusta esta ruta a tu Base real
+from app.db.base import Base  # <-- Ajusta esta ruta a tu Base real
 
 class Patient(Base):
     __tablename__ = "patients"
