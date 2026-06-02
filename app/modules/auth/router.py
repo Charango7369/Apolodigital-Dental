@@ -10,8 +10,8 @@ from app.db.session import get_db
 from app.core.security import verify_password, create_access_token, create_refresh_token
 from app.models import User  # Ajusta si tu modelo User está en otra ruta
 
-# IMPORTANTE: Asegúrate de que esta ruta coincida con tu esquema de LoginRequest
-from app.schemas.auth import LoginRequest  
+# IMPORTANTE: Asegúrate de que esta ruta coincida con tu esquema de LoginRequest  
+from app.modules.auth.schemas import LoginRequest
 
 router = APIRouter(prefix="/auth", tags=["Auth"])
 
