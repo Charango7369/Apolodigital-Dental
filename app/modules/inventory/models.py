@@ -1,7 +1,8 @@
 import uuid
 from sqlalchemy import Column, String, Integer, ForeignKey, Boolean, DateTime, func
 from sqlalchemy.dialects.postgresql import UUID
-from app.db.session import Base # Ajusta según tu base declarativa
+from app.db.base import Base
+
 
 class InventoryItem(Base):
     __tablename__ = "inventory_items"

@@ -1,7 +1,7 @@
 import uuid
 from sqlalchemy import Column, String, Integer, ForeignKey, Boolean, DateTime, func
 from sqlalchemy.dialects.postgresql import UUID
-from app.db.session import Base
+from app.db.base import Base
 
 class OdontogramEntry(Base):
     __tablename__ = "odontogram_entries"
