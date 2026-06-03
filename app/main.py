@@ -36,7 +36,7 @@ from app.modules.billing.router import router as billing_router
 from app.modules.odontogram.router import router as odontogram_router
 from app.modules.notifications.router import router as notifications_router
 from app.modules.patients.router import router as patients_router
-
+from app.modules.auth.router import router as auth_router
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """
@@ -114,6 +114,8 @@ app.include_router(billing_router)
 app.include_router(odontogram_router)
 app.include_router(notifications_router)
 app.include_router(patients_router)
+app.include_router(auth_router)
+
 # =========================================================
 # Health Check
 # =========================================================
