@@ -13,9 +13,21 @@ ACCESS_TOKEN_EXPIRE_MINUTES = 60 * 24  # El token durará 24 horas
 # Configuración del hashing de contraseñas
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
-# 🔒 Encriptar contraseña en texto plano
+# app/core/security.py
+
+# ... (todo tu código anterior se queda exactamente igual) ...
+
 def get_password_hash(password: str) -> str:
     return pwd_context.hash(password)
+
+# 🔗 ALIAS DE COMPATIBILIDAD:
+# Esto mapea el nombre que tu UserService ya está buscando
+hash_password = get_password_hash
+
+def verify_password(plain_password: str, hashed_password: str) -> bool:
+    return pwd_context.verify(plain_password, hashed_password)
+
+# ... (el resto del archivo se queda igual) ...
 
 # 🔓 Verificar si la contraseña coincide con el hash de la DB
 def verify_password(plain_password: str, hashed_password: str) -> bool:
