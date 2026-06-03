@@ -14,10 +14,9 @@ from app.modules.users.models import User
 # Importaciones directas (si alguna falla, nos enteraremos inmediatamente en los logs)
 from app.modules.patients.models import Patient
 from app.modules.appointments.models import Appointment
-# 2. Modelos EN DESARROLLO (Comentados temporalmente)
-# Descoméntalos uno por uno solo cuando crees su respectivo archivo 'models.py' real.
 
-#from app.modules.inventory.models import InventoryItem
-#from app.modules.billing.models import Invoice
-#from app.modules.odontogram.models import OdontogramEntry
-#from app.modules.notifications.models import Notification
+
+from app.modules.inventory.models import InventoryItem
+from app.modules.billing.models import Invoice
+from app.modules.odontogram.models import OdontogramEntry
+from app.modules.notifications.models import Notification
