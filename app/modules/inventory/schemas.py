@@ -3,24 +3,27 @@ from pydantic import BaseModel, Field
 from uuid import UUID
 from datetime import datetime
 from typing import Optional
+from decimal import Decimal
 
-# 1. Esquema Base
-class InventoryItemBase(BaseModel):
-    name: str = Field(..., description="Nombre del insumo médico (ej. Guantes de látex)")
-    stock: int = Field(default=0, ge=0, description="Cantidad disponible en inventario")
+class InventoryBase(BaseModel):
+    item_name: str = Field(..., max_length=255, description="Nombre del insumo dental")
+    sku: Optional[str] = Field(None, max_length=100, description="Código único o SKU")
+    stock: int = Field(0, ge=0, description="Cantidad disponible")
+    stock_alert: int = Field(5, ge=0, description="Umbral mínimo para alerta")
+    price: Decimal = Field(Decimal("0.00"), ge=0, description="Precio o costo por unidad")
 
-# 2. Esquema para Crear (¡Esta es la clase que te está pidiendo el router!)
-class InventoryItemCreate(InventoryItemBase):
-    tenant_id: UUID
+class InventoryCreate(InventoryBase):
+    pass  # El frontend no manda tenant_id, lo inyecta el token en secreto
 
-# 3. Esquema para Actualizar
-class InventoryItemUpdate(BaseModel):
-    name: Optional[str] = None
+class InventoryUpdate(BaseModel):
+    item_name: Optional[str] = Field(None, max_length=255)
+    sku: Optional[str] = Field(None, max_length=100)
     stock: Optional[int] = Field(None, ge=0)
+    stock_alert: Optional[int] = Field(None, ge=0)
+    price: Optional[Decimal] = Field(None, ge=0)
     is_active: Optional[bool] = None
 
-# 4. Esquema para Respuesta
-class InventoryItemResponse(InventoryItemBase):
+class InventoryResponse(InventoryBase):
     id: UUID
     tenant_id: UUID
     is_active: bool
