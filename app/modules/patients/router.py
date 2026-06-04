@@ -2,6 +2,7 @@
 import traceback
 from datetime import datetime, timezone
 from uuid import UUID
+
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
@@ -9,12 +10,14 @@ from typing import List
 
 from app.db.session import get_db
 from app.modules.patients.models import Patient as PatientModel
-from app.modules.patients.schemas import PatientCreate, PatientResponse
+# 🛡️ 1. CORREGIMOS LAS IMPORTACIONES ADICIONANDO PATIENTUPDATE:
+from app.modules.patients.schemas import PatientCreate, PatientResponse, PatientUpdate
 from app.modules.auth.dependencies import get_current_user
 from app.modules.users.models import User as UserModel
 
 router = APIRouter(prefix="/patients", tags=["Patients"])
 
+# --- ENDPOINT: CREAR PACIENTE ---
 @router.post("/", response_model=PatientResponse, status_code=status.HTTP_201_CREATED)
 async def create_patient(
     payload: PatientCreate, 
@@ -22,112 +25,86 @@ async def create_patient(
     current_user: UserModel = Depends(get_current_user)
 ):
     try:
-        # 1. Instanciamos el modelo estrictamente con los campos que su constructor acepta
+        ahora = datetime.now(timezone.utc)
         new_patient = PatientModel(
             first_name=payload.first_name,
             last_name=payload.last_name,
             email=payload.email,
             phone=payload.phone
         )
-        
-        # 📅 Generamos el tiempo actual
-        ahora = datetime.now(timezone.utc)
-        
-        # 2. ASIGNACIÓN IMPERATIVA DE METADATOS (Evita el error de palabra clave inválida)
         new_patient.tenant_id = current_user.tenant_id
         new_patient.created_by = current_user.id
         new_patient.is_active = True
         new_patient.created_at = ahora
         new_patient.updated_at = ahora
 
-        # 3. Guardamos físicamente en la base de datos en Railway
         db.add(new_patient)
         await db.commit()
-        
-        # 4. Refrescamos para asegurar sincronización con Postgres
         await db.refresh(new_patient)
-        
         return new_patient
-
     except Exception as e:
         print("\n❌ ====== ¡FALLO EN RESPUESTA DE PACIENTE! ====== ❌")
         traceback.print_exc()
         print("❌ =================================================== \n")
-        
         if isinstance(e, HTTPException):
             raise e
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Error en validación de respuesta: {str(e)}"
-        )
-# 🎯 3. OBTENER UN PACIENTE ESPECÍFICO
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+
+# --- ENDPOINT: LISTAR PACIENTES ---
+@router.get("/", response_model=List[PatientResponse])
+async def get_my_patients(
+    db: AsyncSession = Depends(get_db),
+    current_user: UserModel = Depends(get_current_user)
+):
+    query = select(PatientModel).where(PatientModel.tenant_id == current_user.tenant_id)
+    result = await db.execute(query)
+    return result.scalars().all()
+
+# --- ENDPOINT: OBTENER UN PACIENTE POR ID ---
 @router.get("/{patient_id}", response_model=PatientResponse)
 async def get_patient_by_id(
-    patient_id: UUID,  # 👈 Ahora que importamos UUID, esto funcionará perfecto
+    patient_id: UUID,
     db: AsyncSession = Depends(get_db),
-    current_user: UserModel = Depends(get_current_user)  # 🔐 El tenant se extrae de aquí de forma segura
+    current_user: UserModel = Depends(get_current_user)
 ):
     query = select(PatientModel).where(
         PatientModel.id == patient_id,
-        PatientModel.tenant_id == current_user.tenant_id  # 👈 Filtro estricto anti-IDOR
+        PatientModel.tenant_id == current_user.tenant_id
+    )
+    result = await db.execute(query)
+    patient = result.scalar_one_or_none()
+    if not patient:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Paciente no encontrado en esta clínica")
+    return patient
+
+# 🔄 2. ENLACE CORREGIDO Y BLINDADO MULTI-TENANT PARA ACTUALIZACIÓN (Línea 86)
+@router.patch("/{patient_id}", response_model=PatientResponse)
+async def update_patient(
+    patient_id: UUID,
+    payload: PatientUpdate,
+    db: AsyncSession = Depends(get_db),
+    current_user: UserModel = Depends(get_current_user) # 🔐 Extraemos el tenant de aquí de forma segura
+):
+    # Buscamos el paciente asegurando que pertenezca al tenant del doctor logueado (Evita IDOR)
+    query = select(PatientModel).where(
+        PatientModel.id == patient_id,
+        PatientModel.tenant_id == current_user.tenant_id
     )
     result = await db.execute(query)
     patient = result.scalar_one_or_none()
     
     if not patient:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Paciente no encontrado en esta clínica"
-        )
-    return patient
-
-# 📝 4. ACTUALIZAR DATOS DE UN PACIENTE
-@router.put("/{patient_id}", response_model=PatientResponse)
-async def update_patient(patient_id: UUID, tenant_id: UUID, patient_update: PatientUpdate, db: AsyncSession = Depends(get_db)):
-    query = select(PatientModel).where(
-        PatientModel.id == patient_id,
-        PatientModel.tenant_id == tenant_id
-    )
-    result = await db.execute(query)
-    db_patient = result.scalar_one_or_none()
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Paciente no encontrado")
     
-    if not db_patient:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Paciente no encontrado"
-        )
+    # Extraemos los datos enviados en el JSON omitiendo los que vengan nulos o no declarados
+    update_data = payload.model_dump(exclude_unset=True)
     
-    update_data = patient_update.model_dump(exclude_unset=True)
     for key, value in update_data.items():
-        setattr(db_patient, key, value)
+        setattr(patient, key, value)
         
-    try:
-        await db.commit()
-        await db.refresh(db_patient)
-        return db_patient
-    except Exception as e:
-        await db.rollback()
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Error al actualizar los datos del paciente: {str(e)}"
-        )
-
-# ❌ 5. ELIMINAR PACIENTE
-@router.delete("/{patient_id}", status_code=status.HTTP_204_NO_CONTENT)
-async def delete_patient(patient_id: UUID, tenant_id: UUID, db: AsyncSession = Depends(get_db)):
-    query = select(PatientModel).where(
-        PatientModel.id == patient_id,
-        PatientModel.tenant_id == tenant_id
-    )
-    result = await db.execute(query)
-    db_patient = result.scalar_one_or_none()
+    patient.updated_at = datetime.now(timezone.utc)
+    patient.updated_by = current_user.id
     
-    if not db_patient:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Paciente no encontrado"
-        )
-    
-    await db.delete(db_patient)
     await db.commit()
-    return None
+    await db.refresh(patient)
+    return patient
