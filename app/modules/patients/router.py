@@ -1,20 +1,17 @@
 # app/modules/patients/router.py
 import traceback
-from datetime import datetime, timezone# 👈 Importamos datetime con soporte UTC
+from datetime import datetime, timezone
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.future import select
-from uuid import UUID
-from typing import List
 
 from app.db.session import get_db
-from app.modules.patients.schemas import PatientCreate, PatientUpdate, PatientResponse
 from app.modules.patients.models import Patient as PatientModel
+from app.modules.patients.schemas import PatientCreate, PatientResponse
 from app.modules.auth.dependencies import get_current_user
 from app.modules.users.models import User as UserModel
+
 router = APIRouter(prefix="/patients", tags=["Patients"])
 
-# ➕ 1. REGISTRAR UN NUEVO PACIENTE
 @router.post("/", response_model=PatientResponse, status_code=status.HTTP_201_CREATED)
 async def create_patient(
     payload: PatientCreate, 
@@ -22,33 +19,35 @@ async def create_patient(
     current_user: UserModel = Depends(get_current_user)
 ):
     try:
-        ahora = datetime.now(timezone.utc)  # 👈 Generamos la estampa de tiempo actual en UTC
-        
-        # 1. Instanciamos el modelo con los datos core y los metadatos de tiempo nativos
+        # 1. Instanciamos el modelo estrictamente con los campos que su constructor acepta
         new_patient = PatientModel(
             first_name=payload.first_name,
             last_name=payload.last_name,
             email=payload.email,
-            phone=payload.phone,
-            created_at=ahora,  # 👈 Satisface a Pydantic de inmediato
-            updated_at=ahora   # 👈 Satisface a Pydantic de inmediato
+            phone=payload.phone
         )
         
-        # 2. Inyectamos los metadatos de seguridad y aislamiento
+        # 📅 Generamos el tiempo actual
+        ahora = datetime.now(timezone.utc)
+        
+        # 2. ASIGNACIÓN IMPERATIVA DE METADATOS (Evita el error de palabra clave inválida)
         new_patient.tenant_id = current_user.tenant_id
         new_patient.created_by = current_user.id
         new_patient.is_active = True
+        new_patient.created_at = ahora
+        new_patient.updated_at = ahora
 
-        # 3. Guardamos físicamente en Postgres en Railway
+        # 3. Guardamos físicamente en la base de datos en Railway
         db.add(new_patient)
         await db.commit()
+        
+        # 4. Refrescamos para asegurar sincronización con Postgres
         await db.refresh(new_patient)
         
         return new_patient
 
     except Exception as e:
         print("\n❌ ====== ¡FALLO EN RESPUESTA DE PACIENTE! ====== ❌")
-        import traceback
         traceback.print_exc()
         print("❌ =================================================== \n")
         
