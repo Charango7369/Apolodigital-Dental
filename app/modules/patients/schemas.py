@@ -4,26 +4,26 @@ from uuid import UUID
 from datetime import datetime
 from typing import Optional
 
-# Esquema base con los datos comunes del paciente
+# 🧬 Esquema base con los datos comunes del paciente
 class PatientBase(BaseModel):
     first_name: str = Field(..., max_length=255, description="Nombre(s) del paciente")
     last_name: str = Field(..., max_length=255, description="Apellido(s) del paciente")
     email: Optional[EmailStr] = Field(None, description="Correo electrónico de contacto")
     phone: Optional[str] = Field(None, max_length=50, description="Número de teléfono o celular")
 
-# Esquema para crear un paciente (Amarrado obligatoriamente a una clínica)
+# ➕ Esquema para crear un paciente (¡Ya NO le pedimos el tenant_id al frontend!)
 class PatientCreate(PatientBase):
-    tenant_id: UUID
+    pass
 
-# Esquema para actualización parcial
+# 🔄 Esquema para actualización parcial (Blindado con longitudes máximas)
 class PatientUpdate(BaseModel):
-    first_name: Optional[str] = None
-    last_name: Optional[str] = None
+    first_name: Optional[str] = Field(None, max_length=255)
+    last_name: Optional[str] = Field(None, max_length=255)
     email: Optional[EmailStr] = None
-    phone: Optional[str] = None
+    phone: Optional[str] = Field(None, max_length=50)
     is_active: Optional[bool] = None
 
-# Esquema de respuesta para el Frontend / Swagger
+# 🎫 Esquema de respuesta limpio para el Frontend / Swagger
 class PatientResponse(PatientBase):
     id: UUID
     tenant_id: UUID

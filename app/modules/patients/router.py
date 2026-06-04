@@ -28,13 +28,26 @@ async def create_patient(patient: PatientCreate, db: AsyncSession = Depends(get_
         )
 
 # 🔍 2. OBTENER TODOS LOS PACIENTES DE UNA CLÍNICA
-@router.get("/", response_model=List[PatientResponse])
-async def get_patients_by_tenant(tenant_id: UUID, db: AsyncSession = Depends(get_db)):
-    # 🚨 FILTRO MULTI-TENANT OBLIGATORIO
-    query = select(PatientModel).where(PatientModel.tenant_id == tenant_id)
-    result = await db.execute(query)
-    patients = result.scalars().all()
-    return patients
+@router.post("/", response_model=PatientResponse, status_code=status.HTTP_201_CREATED)
+async def create_patient(
+    payload: PatientCreate, 
+    db: AsyncSession = Depends(get_db),
+    current_user: UserModel = Depends(get_current_user)
+):
+    # Desestructuramos el payload de Pydantic alineado a tu PatientBase
+    new_patient = PatientModel(
+        first_name=payload.first_name,
+        last_name=payload.last_name,
+        email=payload.email,
+        phone=payload.phone,
+        tenant_id=current_user.tenant_id,  # 👈 Inyección invisible y segura desde el JWT
+        created_by=current_user.id         # 👈 Auditoría automática
+    )
+    
+    db.add(new_patient)
+    await db.commit()
+    await db.refresh(new_patient)
+    return new_patient
 
 # 🎯 3. OBTENER UN PACIENTE ESPECÍFICO
 @router.get("/{patient_id}", response_model=PatientResponse)
