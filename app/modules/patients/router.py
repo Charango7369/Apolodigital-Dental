@@ -14,19 +14,33 @@ router = APIRouter(prefix="/patients", tags=["Patients"])
 
 # ➕ 1. REGISTRAR UN NUEVO PACIENTE
 @router.post("/", response_model=PatientResponse, status_code=status.HTTP_201_CREATED)
-async def create_patient(patient: PatientCreate, db: AsyncSession = Depends(get_db)):
-    db_patient = PatientModel(**patient.model_dump())
-    db.add(db_patient)
-    try:
-        await db.commit()
-        await db.refresh(db_patient)
-        return db_patient
-    except Exception as e:
-        await db.rollback()
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Error al registrar al paciente: {str(e)}"
-        )
+async def create_patient(
+    payload: PatientCreate, 
+    db: AsyncSession = Depends(get_db),
+    current_user: UserModel = Depends(get_current_user)
+):
+    # 1. Instanciamos el modelo base con los datos limpios del Pydantic payload
+    new_patient = PatientModel(
+        first_name=payload.first_name,
+        last_name=payload.last_name,
+        email=payload.email,
+        phone=payload.phone
+    )
+    
+    # 2. ASIGNACIÓN INYECTADA EXPLÍCITA (Garantiza que no llegue None a Postgres)
+    new_patient.tenant_id = current_user.tenant_id
+    new_patient.created_by = current_user.id
+    
+    # 3. Opcional: Si tu modelo maneja el campo is_active por defecto, lo aseguramos aquí
+    if hasattr(new_patient, 'is_active'):
+        new_patient.is_active = True
+
+    # 4. Persistencia asíncrona en Postgres
+    db.add(new_patient)
+    await db.commit()
+    await db.refresh(new_patient)
+    
+    return new_patient
 
 # 🔍 2. OBTENER TODOS LOS PACIENTES DE UNA CLÍNICA
 @router.post("/", response_model=PatientResponse, status_code=status.HTTP_201_CREATED)
