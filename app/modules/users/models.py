@@ -1,6 +1,6 @@
 # app/modules/users/models.py
 import uuid
-from sqlalchemy import String
+from sqlalchemy import String, text
 from sqlalchemy.orm import mapped_column, Mapped
 
 from app.db.base import Base
@@ -17,4 +17,5 @@ class User(Base, TimestampMixin, AuditMixin, TenantMixin):
     hashed_password: Mapped[str] = mapped_column(String(255))
     role: Mapped[str] = mapped_column(String(50))
     
-    
+    # 🔐 LA COLUMNA AL ESTILO MODERNOCON VALOR POR DEFECTO AUTOMÁTICO
+    is_active: Mapped[bool] = mapped_column(default=True, server_default=text('TRUE'))
