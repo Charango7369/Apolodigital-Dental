@@ -1,8 +1,11 @@
 # app/modules/patients/router.py
 import traceback
 from datetime import datetime, timezone
+from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.future import select
+from typing import List
 
 from app.db.session import get_db
 from app.modules.patients.models import Patient as PatientModel
@@ -59,10 +62,14 @@ async def create_patient(
         )
 # 🎯 3. OBTENER UN PACIENTE ESPECÍFICO
 @router.get("/{patient_id}", response_model=PatientResponse)
-async def get_patient(patient_id: UUID, tenant_id: UUID, db: AsyncSession = Depends(get_db)):
+async def get_patient_by_id(
+    patient_id: UUID,  # 👈 Ahora que importamos UUID, esto funcionará perfecto
+    db: AsyncSession = Depends(get_db),
+    current_user: UserModel = Depends(get_current_user)  # 🔐 El tenant se extrae de aquí de forma segura
+):
     query = select(PatientModel).where(
         PatientModel.id == patient_id,
-        PatientModel.tenant_id == tenant_id
+        PatientModel.tenant_id == current_user.tenant_id  # 👈 Filtro estricto anti-IDOR
     )
     result = await db.execute(query)
     patient = result.scalar_one_or_none()
@@ -70,7 +77,7 @@ async def get_patient(patient_id: UUID, tenant_id: UUID, db: AsyncSession = Depe
     if not patient:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail="Paciente no encontrado o no pertenece a esta clínica"
+            detail="Paciente no encontrado en esta clínica"
         )
     return patient
 
