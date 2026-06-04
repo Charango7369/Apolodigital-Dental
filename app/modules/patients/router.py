@@ -1,5 +1,6 @@
 # app/modules/patients/router.py
 import traceback
+from datetime import datetime, timezone# 👈 Importamos datetime con soporte UTC
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
@@ -21,26 +22,26 @@ async def create_patient(
     current_user: UserModel = Depends(get_current_user)
 ):
     try:
-        # 1. Instanciamos el modelo con los datos core
+        ahora = datetime.now(timezone.utc)  # 👈 Generamos la estampa de tiempo actual en UTC
+        
+        # 1. Instanciamos el modelo con los datos core y los metadatos de tiempo nativos
         new_patient = PatientModel(
             first_name=payload.first_name,
             last_name=payload.last_name,
             email=payload.email,
-            phone=payload.phone
+            phone=payload.phone,
+            created_at=ahora,  # 👈 Satisface a Pydantic de inmediato
+            updated_at=ahora   # 👈 Satisface a Pydantic de inmediato
         )
         
         # 2. Inyectamos los metadatos de seguridad y aislamiento
         new_patient.tenant_id = current_user.tenant_id
         new_patient.created_by = current_user.id
-        
-        # 🛡️ Salvavidas para Pydantic: Forzamos el estado activo en la instancia de Python
         new_patient.is_active = True
 
         # 3. Guardamos físicamente en Postgres en Railway
         db.add(new_patient)
         await db.commit()
-        
-        # 🔄 REFRESH CRÍTICO: Obligamos a SQLAlchemy a traer created_at y updated_at de la DB
         await db.refresh(new_patient)
         
         return new_patient
