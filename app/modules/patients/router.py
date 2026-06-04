@@ -8,7 +8,8 @@ from typing import List
 from app.db.session import get_db
 from app.modules.patients.schemas import PatientCreate, PatientUpdate, PatientResponse
 from app.modules.patients.models import Patient as PatientModel
-
+from app.modules.auth.dependencies import get_current_user
+from app.modules.users.models import User as UserModel
 router = APIRouter(prefix="/patients", tags=["Patients"])
 
 # ➕ 1. REGISTRAR UN NUEVO PACIENTE
