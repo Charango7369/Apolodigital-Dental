@@ -21,7 +21,7 @@ async def create_patient(
     current_user: UserModel = Depends(get_current_user)
 ):
     try:
-        # 1. Instanciamos el modelo con los datos limpios
+        # 1. Instanciamos el modelo con los datos core
         new_patient = PatientModel(
             first_name=payload.first_name,
             last_name=payload.last_name,
@@ -29,19 +29,25 @@ async def create_patient(
             phone=payload.phone
         )
         
-        # 2. Forzamos la inyección del contexto del token
+        # 2. Inyectamos los metadatos de seguridad y aislamiento
         new_patient.tenant_id = current_user.tenant_id
         new_patient.created_by = current_user.id
         
-        # 3. Guardamos en la base de datos
+        # 🛡️ Salvavidas para Pydantic: Forzamos el estado activo en la instancia de Python
+        new_patient.is_active = True
+
+        # 3. Guardamos físicamente en Postgres en Railway
         db.add(new_patient)
         await db.commit()
+        
+        # 🔄 REFRESH CRÍTICO: Obligamos a SQLAlchemy a traer created_at y updated_at de la DB
         await db.refresh(new_patient)
+        
         return new_patient
 
     except Exception as e:
-        # 🚨 ESTO VA A CORREGIR NUESTRO PUNTO CIEGO:
-        print("\n❌ ====== ¡FALLO EN CREACIÓN DE PACIENTE! ====== ❌")
+        print("\n❌ ====== ¡FALLO EN RESPUESTA DE PACIENTE! ====== ❌")
+        import traceback
         traceback.print_exc()
         print("❌ =================================================== \n")
         
@@ -49,9 +55,8 @@ async def create_patient(
             raise e
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Error en persistencia Multi-Tenant: {str(e)}"
+            detail=f"Error en validación de respuesta: {str(e)}"
         )
-
 # 🎯 3. OBTENER UN PACIENTE ESPECÍFICO
 @router.get("/{patient_id}", response_model=PatientResponse)
 async def get_patient(patient_id: UUID, tenant_id: UUID, db: AsyncSession = Depends(get_db)):
