@@ -1,31 +1,38 @@
-# app/modules/odontogram/schemas.py
-from pydantic import BaseModel, Field
+# app/modules/odontograms/schemas.py
+from pydantic import BaseModel, Field, field_validator
 from uuid import UUID
 from datetime import datetime
-from typing import Optional
+from typing import Optional, Dict, List, Any
 
-# Esquema base con los campos comunes
-class OdontogramEntryBase(BaseModel):
-    tooth_number: int = Field(..., ge=1, le=52, description="Número de la pieza dental según sistema FDI o Universal")
-    status_item: str = Field(..., description="Estado o tratamiento (ej. caries, corona, calza, ausente)")
-    notes: Optional[str] = Field(None, max_length=500, description="Notas clínicas adicionales sobre la pieza")
+# Esquema para validar un hallazgo específico en una pieza dental
+class ToothCondition(BaseModel):
+    condition: str = Field(..., description="Ej: CARIES, CORONA, TRATAMIENTO_CONDUCTO, AUSENTE")
+    faces: List[str] = Field(default=[], description="Caras afectadas Ej: ['V', 'O', 'M', 'D', 'L']")
 
-# Esquema para registrar un hallazgo (Enlazado a paciente y clínica)
-class OdontogramEntryCreate(OdontogramEntryBase):
+class OdontogramCreate(BaseModel):
     patient_id: UUID
-    tenant_id: UUID
+    description: Optional[str] = Field(None, description="Notas u observaciones generales")
+    # Diccionario donde la llave es el número de diente (str) y el valor es su condición
+    teeth_data: Dict[str, ToothCondition] = Field(..., description="Mapa de piezas dentales afectadas")
 
-# Esquema para modificar una nota o cambiar el estado del diente
-class OdontogramEntryUpdate(BaseModel):
-    status_item: Optional[str] = None
-    notes: Optional[str] = Field(None, max_length=500)
-    is_active: Optional[bool] = None
+    @field_validator('teeth_data')
+    @classmethod
+    def validate_fdi_teeth(cls, v: Dict[str, Any]) -> Dict[str, Any]:
+        # Validamos códigos del sistema FDI (Adultos: 11-48, Niños: 51-85)
+        valid_ranges = list(range(11, 19)) + list(range(21, 29)) + list(range(31, 39)) + list(range(41, 49)) + \
+                       list(range(51, 56)) + list(range(61, 66)) + list(range(71, 76)) + list(range(81, 86))
+        for tooth_num in v.keys():
+            if not tooth_num.isdigit() or int(tooth_num) not in valid_ranges:
+                raise ValueError(f"El número de diente {tooth_num} no es un código válido del sistema FDI.")
+        return v
 
-# Esquema de respuesta para el mapa dental del Frontend
-class OdontogramEntryResponse(OdontogramEntryBase):
+class OdontogramResponse(BaseModel):
     id: UUID
     patient_id: UUID
     tenant_id: UUID
+    doctor_id: UUID
+    description: Optional[str]
+    teeth_data: Dict[str, Any]
     is_active: bool
     created_at: datetime
     updated_at: datetime
