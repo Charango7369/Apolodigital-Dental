@@ -113,7 +113,7 @@ app.include_router(health_router)
 
 app.include_router(inventory_router)
 
-app.include_router(odontograms_router)
+app.include_router(odontogram_router)
 # =========================================================
 # Health Check
 # =========================================================
