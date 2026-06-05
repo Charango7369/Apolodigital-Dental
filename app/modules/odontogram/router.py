@@ -9,8 +9,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 
 from app.db.session import get_db
-from app.modules.odontograms.models import Odontogram as OdontogramModel
-from app.modules.odontograms.schemas import OdontogramCreate, OdontogramResponse
+from app.modules.odontogram.models import Odontogram as OdontogramModel
+from app.modules.odontogram.schemas import OdontogramCreate, OdontogramResponse
 from app.modules.auth.dependencies import get_current_user
 from app.modules.users.models import User as UserModel
 
