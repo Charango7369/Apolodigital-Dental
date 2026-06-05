@@ -15,7 +15,8 @@ class User(Base, TimestampMixin, AuditMixin, TenantMixin):
     full_name: Mapped[str] = mapped_column(String(255))
     email: Mapped[str] = mapped_column(String(255), unique=True)
     hashed_password: Mapped[str] = mapped_column(String(255))
-    role: Mapped[str] = mapped_column(String(50))
+    role: Mapped[str] = mapped_column(String(50), default="DOCTOR") 
+    # Roles posibles: "ADMIN", "DOCTOR", "RECEPTIONIST"
     
     # 🔐 LA COLUMNA AL ESTILO MODERNOCON VALOR POR DEFECTO AUTOMÁTICO
     is_active: Mapped[bool] = mapped_column(default=True, server_default=text('TRUE'))
