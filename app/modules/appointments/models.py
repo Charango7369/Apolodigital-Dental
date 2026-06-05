@@ -1,21 +1,25 @@
 # app/modules/appointments/models.py
-from sqlalchemy import Column, Integer, String, ForeignKey, DateTime
-from sqlalchemy.dialects.postgresql import UUID
-from sqlalchemy.orm import relationship
-from app.db.base import Base # <-- Usa la misma ruta que te funcionó en patients
+import uuid
+from sqlalchemy import String, Text, ForeignKey, DateTime
+from sqlalchemy.orm import mapped_column, Mapped
+from datetime import datetime
 
-class Appointment(Base):
+from app.db.base import Base
+from app.db.mixins import TimestampMixin, AuditMixin, TenantMixin
+
+class Appointment(Base, TimestampMixin, AuditMixin, TenantMixin):
     __tablename__ = "appointments"
 
-    id = Column(Integer, primary_key=True, index=True)
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    patient_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("patients.id", ondelete="CASCADE"))
+    doctor_id: Mapped[uuid.UUID] = mapped_column(nullable=False)
     
-    #tenant_id = Column(Integer, ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False)
-    tenant_id = Column(UUID(as_uuid=True), ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False)
-    #patient_id = Column(Integer, ForeignKey("patients.id", ondelete="CASCADE"), nullable=False)
-    patient_id = Column(Integer, ForeignKey("patients.id", ondelete="CASCADE"), nullable=False)
-    appointment_date = Column(DateTime, nullable=False)
-    notes = Column(String, nullable=True)
-
-    # Relaciones
-    tenant = relationship("Tenant")
-    patient = relationship("Patient")
+    # Manejo estricto de tiempos (UTC forzado en el backend)
+    start_time: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    end_time: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    
+    # Estados: PENDING, CONFIRMED, COMPLETED, CANCELLED, NO_SHOW
+    status: Mapped[str] = mapped_column(String(50), default="PENDING")
+    reason: Mapped[str] = mapped_column(Text, nullable=True)
+    
+    is_active: Mapped[bool] = mapped_column(default=True)
