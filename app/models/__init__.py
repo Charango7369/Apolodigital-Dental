@@ -18,6 +18,5 @@ from app.modules.appointments.models import Appointment
 
 from app.modules.inventory.models import InventoryItem
 from app.modules.billing.models import Invoice
-from app.modules.odontogram.models import OdontogramEntry
-from app.modules.odontogram.models import Odontogram  # 👈 Si tu carpeta es plural
+from app.modules.odontogram.models import Odontogram  
 from app.modules.notifications.models import Notification
