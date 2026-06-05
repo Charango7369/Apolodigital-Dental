@@ -58,8 +58,19 @@ async def get_my_patients(
 ):
     query = select(PatientModel).where(PatientModel.tenant_id == current_user.tenant_id)
     result = await db.execute(query)
-    return result.scalars().all()
-
+    patients = result.scalars().all()
+    
+    # 🛡️ SALVAVIDAS: Saneamos los registros viejos en memoria antes de enviarlos a Pydantic
+    ahora_mismo = datetime.now(timezone.utc)
+    for p in patients:
+        if getattr(p, 'is_active', None) is None:
+            p.is_active = True
+        if getattr(p, 'created_at', None) is None:
+            p.created_at = ahora_mismo
+        if getattr(p, 'updated_at', None) is None:
+            p.updated_at = ahora_mismo
+            
+    return patients
 # --- ENDPOINT: OBTENER UN PACIENTE POR ID ---
 @router.get("/{patient_id}", response_model=PatientResponse)
 async def get_patient_by_id(
