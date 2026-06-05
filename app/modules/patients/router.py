@@ -24,6 +24,19 @@ async def create_patient(
     db: AsyncSession = Depends(get_db),
     current_user: UserModel = Depends(get_current_user)
 ):
+    # Validar duplicidad por correo electrónico en la misma clínica
+    if payload.email:
+            existing_query = select(PatientModel).where(
+                PatientModel.email == payload.email,
+                PatientModel.tenant_id == current_user.tenant_id
+            )
+            existing_patient = await db.scalar(existing_query)
+            
+            if existing_patient:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Ya existe un paciente registrado con este correo en la clínica."
+                )
     try:
         ahora = datetime.now(timezone.utc)
         new_patient = PatientModel(
