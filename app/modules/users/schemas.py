@@ -1,7 +1,7 @@
 # app/modules/users/schemas.py
-from pydantic import BaseModel, EmailStr
+from pydantic import BaseModel, Field, EmailStr
 from uuid import UUID  # 👈 Usamos UUID para todo
-from typing import List
+from typing import List, Optional
 
 class UserCreate(BaseModel):
     full_name: str
