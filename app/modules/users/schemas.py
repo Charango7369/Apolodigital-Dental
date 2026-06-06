@@ -1,6 +1,7 @@
 # app/modules/users/schemas.py
 from pydantic import BaseModel, EmailStr
 from uuid import UUID  # 👈 Usamos UUID para todo
+from typing import List
 
 class UserCreate(BaseModel):
     full_name: str
@@ -8,6 +9,7 @@ class UserCreate(BaseModel):
     password: str
     role: str
     tenant_id: UUID  # 👈 Cambiado a UUID
+    roles: List[str] = Field(default=["RECEPTIONIST"], description="Lista de roles del usuario")
 
 
 class UserResponse(BaseModel):
@@ -16,7 +18,7 @@ class UserResponse(BaseModel):
     email: EmailStr
     role: str
     tenant_id: UUID  # 👈 La clínica ahora también usará UUID
-
+    roles: List[str]
     model_config = {
         "from_attributes": True
     }

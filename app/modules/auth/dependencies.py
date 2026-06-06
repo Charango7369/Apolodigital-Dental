@@ -1,10 +1,12 @@
 # app/modules/auth/dependencies.py
-from fastapi import Depends, HTTPException, status
+from typing import List
+from uuid import UUID
+
+from fastapi import HTTPException, status, Depends
 from fastapi.security import OAuth2PasswordBearer
 from jose import jwt, JWTError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
-from uuid import UUID
 
 from app.db.session import get_db
 from app.core.security import SECRET_KEY, ALGORITHM
@@ -56,3 +58,23 @@ async def get_current_user(
         
     # 🎯 ¡ÉXITO! Devolvemos el objeto usuario con su respectivo tenant_id
     return user
+
+def require_role(allowed_roles: List[str]):
+    """
+    Fábrica de dependencias RBAC.
+    Verifica si el usuario tiene al menos UNO de los roles permitidos en su arreglo de roles (JSONB).
+    """
+    async def role_checker(current_user: UserModel = Depends(get_current_user)) -> UserModel:
+        
+        # current_user.roles es una lista, ej: ["ADMIN", "DOCTOR"]
+        # allowed_roles es una lista pasada en el router, ej: ["ADMIN"]
+        has_permission = any(role in allowed_roles for role in current_user.roles)
+        
+        if not has_permission:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=f"Acceso denegado. Se requiere al menos uno de estos roles: {', '.join(allowed_roles)}"
+            )
+        return current_user
+    
+    return role_checker
