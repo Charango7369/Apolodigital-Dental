@@ -45,3 +45,8 @@ class AccountResponse(BaseModel):
     model_config = {
         "from_attributes": True
     }
+    class InvoiceCreate(BaseModel):
+    account_id: UUID
+    issue_date: datetime
+    due_date: datetime
+    # ... otros campos que necesites ...
