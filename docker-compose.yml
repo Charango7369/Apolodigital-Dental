@@ -1,0 +1,16 @@
+services:
+  db:
+    image: postgres:16-alpine
+    container_name: apolo-db-local
+    restart: always
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: dental_db
+    ports:
+      - "5432:5432" # CRÍTICO: Expone el puerto hacia Windows
+    volumes:
+      - apolodigital-dental_postgres_data:/var/lib/postgresql/data
+
+volumes:
+  apolodigital-dental_postgres_data:

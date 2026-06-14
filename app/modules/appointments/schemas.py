@@ -3,6 +3,7 @@ from pydantic import BaseModel, Field, model_validator
 from uuid import UUID
 from datetime import datetime
 from typing import Optional
+from decimal import Decimal
 
 class AppointmentBase(BaseModel):
     patient_id: UUID
@@ -37,3 +38,7 @@ class AppointmentResponse(AppointmentBase):
     model_config = {
         "from_attributes": True
     }
+    
+class AppointmentCompleteRequest(BaseModel):
+    final_cost: Decimal = Field(..., gt=0, description="Costo total final del tratamiento realizado")
+    treatment_description: str = Field(..., min_length=3, description="Detalle clínico/financiero para la cuenta")

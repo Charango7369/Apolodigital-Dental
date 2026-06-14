@@ -1,115 +1,72 @@
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException, Security, status
+from fastapi.security.api_key import APIKeyHeader
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import text
-from datetime import datetime, timezone
+import logging
+
+from app.core.config import settings
 from app.db.session import get_db
 
 router = APIRouter(prefix="/health", tags=["Health"])
+logger = logging.getLogger(__name__)
 
-@router.get("/deep")
-async def deep_health_check(db: AsyncSession = Depends(get_db)):
-    status = "healthy"
-    checks = {}
+# Definimos la cabecera esperada para CI/CD
+api_key_header = APIKeyHeader(name="X-CI-TOKEN", auto_error=False)
 
-    # ==========================================
-    # 1. VERIFICACIÓN DE CONEXIÓN A LA DB
-    # ==========================================
-    try:
-        await db.execute(text("SELECT 1"))
-        checks["db_connection"] = {
-            "status": "pass",
-            "details": {"status": "pass", "detail": "Connection established and SELECT 1 OK"}
-        }
-    except Exception as e:
-        status = "unhealthy"
-        checks["db_connection"] = {"status": "fail", "error": str(e)}
-
-    # ==========================================
-    # 2. VERIFICACIÓN DE EXISTENCIA DE TABLAS (¡Aquí sumamos las nuevas!)
-    # ==========================================
-    # Definimos la lista con las 7 tablas reales que deben existir en Postgres
-    REQUIRED_TABLES = [
-        "tenants", 
-        "users", 
-        "patients", 
-        "inventory_items", 
-        "invoices", 
-        "odontogram_entries", 
-        "notifications"
-    ]
+async def verify_ci_token(ci_token: str = Security(api_key_header)):
+    """
+    Verifica que el token inyectado en los headers coincida con el secreto 
+    configurado en las variables de entorno para operaciones sensibles.
+    """
+    # Si settings.CI_SECRET_TOKEN no está definido, bloquéalo por defecto por seguridad.
+    expected_token = getattr(settings, "CI_SECRET_TOKEN", None)
     
-    try:
-        # Consultamos las tablas físicas existentes en el esquema público de Postgres
-        query = text("""
-            SELECT table_name 
-            FROM information_schema.tables 
-            WHERE table_schema = 'public'
-        """)
-        result = await db.execute(query)
-        existing_tables = [row[0] for row in result.fetchall()]
-        
-        # Filtramos cuáles de nuestras tablas requeridas sí están creadas
-        tables_found = [table for table in REQUIRED_TABLES if table in existing_tables]
-        
-        # Si falta alguna tabla requerida, el estado del check baja a fail
-        missing_tables = set(REQUIRED_TABLES) - set(existing_tables)
-        
-        if missing_tables:
-            table_status = "fail"
-            status = "unhealthy"
-            detail_msg = f"Missing tables: {', '.join(missing_tables)}"
-        else:
-            table_status = "pass"
-            detail_msg = "All required tables are present in the database."
+    if not expected_token or ci_token != expected_token:
+        logger.warning("Intento de acceso no autorizado a /health/deep")
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Access restricted to CI/CD pipelines or authorized monitors"
+        )
+    return ci_token
 
-        checks["tables_existence"] = {
-            "status": table_status,
-            "details": {
-                "status": table_status,
-                "detail": detail_msg,
-                "tables_found": tables_found
-            }
-        }
-    except Exception as e:
-        status = "unhealthy"
-        checks["tables_existence"] = {"status": "fail", "error": str(e)}
-
-    # ==========================================
-    # 3. VALIDACIÓN DE LLAVES FORESTANAS (tenant_id)
-    # ==========================================
-    try:
-        # Validamos que las tablas clave tengan la columna de aislamiento multi-tenant
-        checks["tenant_id_validation"] = {
-            "status": "pass",
-            "details": {"status": "pass", "detail": "tenant_id columns validated"}
-        }
-    except Exception as e:
-        status = "unhealthy"
-        checks["tenant_id_validation"] = {"status": "fail", "error": str(e)}
-
-    # ==========================================
-    # 4. SINCRONIZACIÓN DE ALEMBIC
-    # ==========================================
-    try:
-        query_alembic = text("SELECT version_num FROM alembic_version")
-        res_alembic = await db.execute(query_alembic)
-        row = res_alembic.fetchone()
-        current_revision = row[0] if row else None
-        
-        if current_revision:
-            checks["alembic_sync"] = {
-                "status": "pass",
-                "details": {"status": "pass", "current_revision": current_revision}
-            }
-        else:
-            status = "unhealthy"
-            checks["alembic_sync"] = {"status": "fail", "error": "Alembic sync failed: No migration version found in DB"}
-    except Exception as e:
-        status = "unhealthy"
-        checks["alembic_sync"] = {"status": "fail", "error": f"Alembic sync failed: {str(e)}"}
-
+@router.get("/")
+async def health_check():
+    """
+    Liveness probe: Rápido, no toca la base de datos.
+    Ideal para el balanceador de carga de Railway.
+    """
     return {
-        "status": status,
-        "timestamp": datetime.now(timezone.utc).isoformat(),
-        "checks": checks
+        "success": True,
+        "message": "API running correctly",
+        "data": {
+            "project": settings.PROJECT_NAME,
+            "environment": settings.ENVIRONMENT,
+            "status": "healthy",
+        },
     }
+
+@router.get("/deep", dependencies=[Depends(verify_ci_token)])
+async def deep_health_check(db: AsyncSession = Depends(get_db)):
+    """
+    Readiness probe: Verifica la conexión real al pool de PostgreSQL.
+    Protegido por token para evitar ataques DDoS al pool de conexiones.
+    """
+    try:
+        # Ejecutamos una consulta ligera para validar el pool
+        result = await db.execute(text("SELECT 1"))
+        if result.scalar() == 1:
+            return {
+                "success": True,
+                "status": "ok", 
+                "database": "connected"
+            }
+        
+        logger.error("Deep health check falló: SELECT 1 retornó un resultado inesperado.")
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Database integrity error")
+        
+    except Exception as e:
+        logger.error(f"Excepción en Deep health check: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE, 
+            detail="Database service unavailable"
+        )

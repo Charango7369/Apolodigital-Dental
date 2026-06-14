@@ -1,6 +1,6 @@
 # app/modules/odontograms/models.py
 import uuid
-from sqlalchemy import String, Text, ForeignKey, JSON
+from sqlalchemy import String, Text, ForeignKey, JSON, text
 from sqlalchemy.orm import mapped_column, Mapped
 
 from app.db.base import Base
@@ -15,5 +15,6 @@ class Odontogram(Base, TimestampMixin, AuditMixin, TenantMixin):
     description: Mapped[str] = mapped_column(Text, nullable=True)
     
     # Aquí se guarda el mapa de los dientes con sus estados y caras afectadas
-    teeth_data: Mapped[dict] = mapped_column(JSON, default=dict, server_default=" '{}'::jsonb ")
+    # 💡 CORRECCIÓN: Se envuelve el valor por defecto en text() para que PostgreSQL no arroje error
+    teeth_data: Mapped[dict] = mapped_column(JSON, default=dict, server_default=text("'{}'::jsonb"))
     is_active: Mapped[bool] = mapped_column(default=True)
