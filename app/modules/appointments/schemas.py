@@ -4,6 +4,7 @@ from uuid import UUID
 from datetime import datetime
 from typing import Optional
 from decimal import Decimal
+from app.modules.patients.schemas import PatientResponse
 
 class AppointmentBase(BaseModel):
     patient_id: UUID
@@ -42,3 +43,18 @@ class AppointmentResponse(AppointmentBase):
 class AppointmentCompleteRequest(BaseModel):
     final_cost: Decimal = Field(..., gt=0, description="Costo total final del tratamiento realizado")
     treatment_description: str = Field(..., min_length=3, description="Detalle clínico/financiero para la cuenta")
+    
+# Modifica tu respuesta final:
+class AppointmentResponse(AppointmentBase):
+    id: UUID
+    tenant_id: UUID
+    status: str
+    is_active: bool
+    created_at: datetime
+    updated_at: datetime
+    # 🚨 LA MAGIA DEL JOIN:
+    patient: Optional[PatientResponse] = None 
+
+    model_config = {
+        "from_attributes": True
+    }

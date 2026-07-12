@@ -1,8 +1,7 @@
-# app/modules/patients/schemas.py
 from pydantic import BaseModel, Field, EmailStr
 from uuid import UUID
 from datetime import datetime
-from typing import Optional
+from typing import Optional, List
 
 # 🧬 Esquema base con los datos comunes del paciente
 class PatientBase(BaseModel):
@@ -34,3 +33,8 @@ class PatientResponse(PatientBase):
     model_config = {
         "from_attributes": True
     }
+
+# 📚 NUEVO: Esquema para la paginación y metadata
+class PaginatedPatientResponse(BaseModel):
+    total: int
+    items: List[PatientResponse]

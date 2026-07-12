@@ -1,38 +1,41 @@
 import traceback
 from datetime import datetime, timezone
 from uuid import UUID
-from typing import List
+from typing import List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, status, BackgroundTasks
+from fastapi import APIRouter, Depends, HTTPException, status, BackgroundTasks, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 from sqlalchemy import and_
+from sqlalchemy.orm import joinedload
 
 from app.db.session import get_db
 from app.modules.appointments.models import Appointment as AppointmentModel
-# 💡 IMPORTANTE: Asegúrate de haber agregado AppointmentCompleteRequest en schemas.py
-from app.modules.appointments.schemas import AppointmentCreate, AppointmentResponse, AppointmentUpdate, AppointmentCompleteRequest
+from app.modules.appointments.schemas import (
+    AppointmentCreate,
+    AppointmentResponse,
+    AppointmentUpdate,
+    AppointmentCompleteRequest
+)
 from app.modules.auth.dependencies import get_current_user
 from app.modules.users.models import User as UserModel
+from app.modules.patients.models import Patient as PatientModel
 from app.services.whatsapp_service import wa_service
-
-# 💡 IMPORTAMOS EL MODELO FINANCIERO
 from app.modules.billing.models import AccountReceivable
 
 router = APIRouter(prefix="/appointments", tags=["Appointments"])
 
 # ➕ 1. AGENDAR CITA (Con validación atómica de solapamientos)
-@router.post("/", response_model=AppointmentResponse, status_code=status.HTTP_201_CREATED)
+@router.post("", response_model=AppointmentResponse, status_code=status.HTTP_201_CREATED)
 async def create_appointment(
-    payload: AppointmentCreate, 
+    payload: AppointmentCreate,
     db: AsyncSession = Depends(get_db),
     current_user: UserModel = Depends(get_current_user)
 ):
     try:
         ahora = datetime.now(timezone.utc)
 
-        # 🛡️ ALGORITMO ANTI-SOLAPAMIENTO (Double-Booking Protection)
-        # Una cita se cruza si: Start1 < End2 AND End1 > Start2
+        # 🛡️ ALGORITMO ANTI-SOLAPAMIENTO
         overlap_query = select(AppointmentModel).where(
             and_(
                 AppointmentModel.tenant_id == current_user.tenant_id,
@@ -43,60 +46,76 @@ async def create_appointment(
                 AppointmentModel.end_time > payload.start_time
             )
         )
-        
+
         overlap_result = await db.execute(overlap_query)
-        existing_overlap = overlap_result.scalar_one_or_none()
-        
+        existing_overlap = overlap_result.scalars().first()
+
         if existing_overlap:
             raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
+                status_code=status.HTTP_409_CONFLICT,
                 detail="El doctor ya tiene una cita agendada o pendiente en ese rango de horario."
             )
 
-        # Si el horario está libre, procedemos con la inserción imperativa
         new_appointment = AppointmentModel(
-            patient_id=payload.patient_id,
-            doctor_id=payload.doctor_id,
-            start_time=payload.start_time,
-            end_time=payload.end_time,
-            reason=payload.reason,
-            status="PENDING"
+            **payload.model_dump(),
+            status="PENDING",
+            tenant_id=current_user.tenant_id,
+            is_active=True,
+            created_at=ahora,
+            updated_at=ahora
         )
-        
-        new_appointment.tenant_id = current_user.tenant_id
-        new_appointment.created_by = current_user.id
-        new_appointment.is_active = True
-        new_appointment.created_at = ahora
-        new_appointment.updated_at = ahora
 
         db.add(new_appointment)
+        await db.flush()
+        safe_appointment_id = new_appointment.id
         await db.commit()
-        await db.refresh(new_appointment)
-        return new_appointment
+
+        query = select(AppointmentModel).options(joinedload(AppointmentModel.patient)).where(
+            AppointmentModel.id == safe_appointment_id
+        )
+        result = await db.execute(query)
+        appointment_with_patient = result.scalar_one()
+
+        return appointment_with_patient
 
     except Exception as e:
+        await db.rollback()
         print("\n❌ ====== ¡FALLO EN AGENDAMIENTO DE CITA! ====== ❌")
         traceback.print_exc()
-        print("❌ =================================================== \n")
         if isinstance(e, HTTPException):
             raise e
         raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST, 
+            status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"Error al procesar la cita: {str(e)}"
         )
 
-# 🔍 2. OBTENER AGENDA DE LA CLÍNICA (Filtro Multi-Tenant)
-@router.get("/", response_model=List[AppointmentResponse])
+# 🔍 2. OBTENER AGENDA DE LA CLÍNICA (Protegido con rango de fechas y paciente opcional)
+@router.get("", response_model=List[AppointmentResponse])
 async def get_my_clinic_agenda(
+    start_date: Optional[datetime] = Query(None, description="Límite inferior UTC"),
+    end_date: Optional[datetime] = Query(None, description="Límite superior UTC"),
+    patient_id: Optional[UUID] = Query(None, description="Filtrar por paciente específico"),
     db: AsyncSession = Depends(get_db),
     current_user: UserModel = Depends(get_current_user)
 ):
-    query = select(AppointmentModel).where(
-        AppointmentModel.tenant_id == current_user.tenant_id
-    ).order_by(AppointmentModel.start_time.asc())
-    
+    base_conditions = [
+        AppointmentModel.tenant_id == current_user.tenant_id,
+        AppointmentModel.is_active == True
+    ]
+
+    if start_date:
+        base_conditions.append(AppointmentModel.start_time >= start_date)
+    if end_date:
+        base_conditions.append(AppointmentModel.start_time <= end_date)
+    if patient_id:
+        base_conditions.append(AppointmentModel.patient_id == patient_id)
+
+    query = select(AppointmentModel).options(joinedload(AppointmentModel.patient)).where(and_(*base_conditions)).order_by(AppointmentModel.start_time.desc())
+
     result = await db.execute(query)
-    return result.scalars().all()
+    appointments = result.scalars().all()
+
+    return [AppointmentResponse.model_validate(appt) for appt in appointments]
 
 # 🔄 3. MODIFICAR ESTADO O REAGENDAR CITA
 @router.patch("/{appointment_id}", response_model=AppointmentResponse)
@@ -112,35 +131,34 @@ async def update_appointment(
     )
     result = await db.execute(query)
     appointment = result.scalar_one_or_none()
-    
+
     if not appointment:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, 
-            detail="Cita no encontrada en esta clínica."
-        )
-    
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Cita no encontrada.")
+
     update_data = payload.model_dump(exclude_unset=True)
-    
     for key, value in update_data.items():
         setattr(appointment, key, value)
-        
+
     appointment.updated_at = datetime.now(timezone.utc)
-    appointment.updated_by = current_user.id
-    
     await db.commit()
-    await db.refresh(appointment)
-    return appointment
 
+    # 🚨 Re-consulta con joinedload para incluir datos del paciente en la respuesta
+    query_with_patient = select(AppointmentModel).options(
+        joinedload(AppointmentModel.patient)
+    ).where(AppointmentModel.id == appointment_id)
+    result = await db.execute(query_with_patient)
+    return result.scalar_one()
 
-# 🏁 4. FINALIZAR CITA Y GENERAR COBRO (NUEVO)
+# 🏁 4. FINALIZAR CITA, GENERAR COBRO Y ENVIAR WHATSAPP (Unificado)
 @router.post("/{appointment_id}/complete", status_code=status.HTTP_200_OK)
 async def complete_appointment_and_bill(
     appointment_id: UUID,
     payload: AppointmentCompleteRequest,
+    background_tasks: BackgroundTasks,
     db: AsyncSession = Depends(get_db),
     current_user: UserModel = Depends(get_current_user)
 ):
-    query = select(AppointmentModel).where(
+    query = select(AppointmentModel).options(joinedload(AppointmentModel.patient)).where(
         and_(
             AppointmentModel.id == appointment_id,
             AppointmentModel.tenant_id == current_user.tenant_id
@@ -157,85 +175,67 @@ async def complete_appointment_and_bill(
 
     ahora = datetime.now(timezone.utc)
 
-    # Actualizamos estado de la cita
+    # 1. Actualizamos estado de la cita
     db_appointment.status = "COMPLETED"
     db_appointment.updated_at = ahora
-    db_appointment.updated_by = current_user.id
 
-    # Creamos la deuda vinculada a la auditoría del usuario actual
+    # 2. Creamos la deuda (Cuenta por Cobrar)
     new_account = AccountReceivable(
         patient_id=db_appointment.patient_id,
+        tenant_id=current_user.tenant_id,
         total_amount=payload.final_cost,
         balance_due=payload.final_cost,
         status="PENDING",
-        description=f"Tratamiento completado - Cita del {db_appointment.start_time.strftime('%Y-%m-%d')}: {payload.treatment_description}"
+        description=f"Tratamiento completado - Cita del {db_appointment.start_time.strftime('%Y-%m-%d')}: {payload.treatment_description}",
+        is_active=True,
+        created_at=ahora,
+        updated_at=ahora
     )
-    
-    new_account.tenant_id = current_user.tenant_id
-    new_account.created_by = current_user.id
-    new_account.is_active = True
-    new_account.created_at = ahora
-    new_account.updated_at = ahora
 
     db.add(new_account)
 
+    # ── Parte crítica: commit de cita + cuenta ──────────────────────────────
+    # Si esto falla, sí queremos hacer rollback (son los datos importantes).
     try:
         await db.commit()
         await db.refresh(db_appointment)
         await db.refresh(new_account)
-        
-        return {
-            "message": "Cita completada y cuenta por cobrar generada exitosamente",
-            "appointment_id": db_appointment.id,
-            "account_id": new_account.id
-        }
     except Exception as e:
         await db.rollback()
         print("\n❌ ====== ¡FALLO AL FINALIZAR CITA Y FACTURAR! ====== ❌")
         traceback.print_exc()
-        print("❌ =================================================== \n")
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"Error en la transacción: {str(e)}"
         )
 
-@router.post("/{appointment_id}/complete", status_code=status.HTTP_200_OK)
-async def complete_appointment_and_bill(
-    appointment_id: UUID,
-    payload: AppointmentCompleteRequest,
-    background_tasks: BackgroundTasks, # 👈 INYECTAMOS BACKGROUND TASKS
-    db: AsyncSession = Depends(get_db),
-    current_user: UserModel = Depends(get_current_user)
-):
-    # ... (TODA TU LÓGICA ANTERIOR DE BUSCAR LA CITA Y CREAR LA CUENTA SE QUEDA IGUAL)
-    # db_appointment = ...
-    # new_account = AccountReceivable(...)
-    # db.add(new_account)
-    # await db.commit()
+    # ── Parte no crítica: notificación WhatsApp (best-effort) ───────────────
+    # 🚨 FIX: WhatsAppService aún es un mock en desarrollo (no tiene send_message).
+    # Este bloque NUNCA debe tumbar la respuesta exitosa de facturación.
+    try:
+        if db_appointment.patient and db_appointment.patient.phone and hasattr(wa_service, "send_message"):
+            patient_phone = db_appointment.patient.phone
+            instance_name = str(current_user.tenant_id)
 
-    # 💡 LA MAGIA DE LAS NOTIFICACIONES EN SEGUNDO PLANO
-    # Preparamos el mensaje a enviar
-    instance_name = str(current_user.tenant_id)
-    # Idealmente, extraerías el teléfono de db_appointment.patient.phone
-    patient_phone = "59177777777" 
-    
-    mensaje_ws = (
-        f"¡Hola! Esperamos que te sientas muy bien tras tu consulta dental hoy. 🦷\n\n"
-        f"El total de tu tratamiento fue de *{payload.final_cost}*. "
-        f"Cualquier duda, estamos a tu disposición."
-    )
+            mensaje_ws = (
+                f"¡Hola {db_appointment.patient.first_name}! Esperamos que te sientas muy bien tras tu consulta dental hoy. 🦷\n\n"
+                f"El total de tu tratamiento fue de *Bs. {payload.final_cost}*. "
+                f"Cualquier duda, estamos a tu disposición."
+            )
 
-    # 🚀 Delegamos la petición HTTP a la tarea de fondo. 
-    # FastAPI devolverá el JSON al instante y luego ejecutará esta función.
-    background_tasks.add_task(
-        wa_service.send_message, 
-        instance_name=instance_name, 
-        phone=patient_phone, 
-        text=mensaje_ws
-    )
+            background_tasks.add_task(
+                wa_service.send_message,
+                instance_name=instance_name,
+                phone=patient_phone,
+                text=mensaje_ws
+            )
+    except Exception:
+        # No interrumpe la respuesta: solo lo dejamos registrado en logs.
+        print("\n⚠️ ====== AVISO: No se pudo notificar por WhatsApp (no crítico) ====== ⚠️")
+        traceback.print_exc()
 
     return {
         "message": "Cita completada y cuenta por cobrar generada exitosamente",
         "appointment_id": db_appointment.id,
-        "account_id": new_account.id # En este punto el JSON ya se envió al frontend
+        "account_id": new_account.id
     }
