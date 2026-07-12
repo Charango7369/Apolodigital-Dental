@@ -1,25 +1,37 @@
-# app/modules/appointments/models.py
+from datetime import datetime, timezone
 import uuid
-from sqlalchemy import String, Text, ForeignKey, DateTime
-from sqlalchemy.orm import mapped_column, Mapped
-from datetime import datetime
-
+from sqlalchemy import Column, String, DateTime, ForeignKey, Boolean, Text
+from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.orm import relationship
 from app.db.base import Base
-from app.db.mixins import TimestampMixin, AuditMixin, TenantMixin
 
-class Appointment(Base, TimestampMixin, AuditMixin, TenantMixin):
+class Appointment(Base):
     __tablename__ = "appointments"
 
-    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
-    patient_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("patients.id", ondelete="CASCADE"))
-    doctor_id: Mapped[uuid.UUID] = mapped_column(nullable=False)
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4, index=True)
+    tenant_id = Column(UUID(as_uuid=True), ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False, index=True)
     
-    # Manejo estricto de tiempos (UTC forzado en el backend)
-    start_time: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
-    end_time: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    # Llaves Foráneas Estrictas (Ambas son obligatorias según tu AppointmentBase)
+    patient_id = Column(UUID(as_uuid=True), ForeignKey("patients.id", ondelete="CASCADE"), nullable=False, index=True)
+    doctor_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+
+    # Intervalo de la Cita
+    start_time = Column(DateTime(timezone=True), nullable=False, index=True)
+    end_time = Column(DateTime(timezone=True), nullable=False)
     
-    # Estados: PENDING, CONFIRMED, COMPLETED, CANCELLED, NO_SHOW
-    status: Mapped[str] = mapped_column(String(50), default="PENDING")
-    reason: Mapped[str] = mapped_column(Text, nullable=True)
+    # Motivo de consulta (Opcional)
+    reason = Column(Text, nullable=True)
     
-    is_active: Mapped[bool] = mapped_column(default=True)
+    # Estado (Valores esperados: PENDING, CONFIRMED, COMPLETED, CANCELLED, NO_SHOW)
+    status = Column(String(50), default="PENDING", nullable=False)
+    
+    # Soft Delete
+    is_active = Column(Boolean, default=True, nullable=False)
+
+    # Auditoría
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+    updated_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
+
+    # Relaciones ORM para navegación fluida
+    patient = relationship("Patient", backref="appointments")
+    doctor = relationship("User", backref="appointments_as_doctor")
