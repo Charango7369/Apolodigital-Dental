@@ -25,4 +25,5 @@ Thumbs.db
 
 dental.db
 *.db 
+scripts/
 temp_alembic/
