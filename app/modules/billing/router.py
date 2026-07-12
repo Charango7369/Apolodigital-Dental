@@ -4,32 +4,60 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 from sqlalchemy.orm import selectinload
 from uuid import UUID
-from typing import List
+from typing import List, Optional
 
 from app.db.session import get_db
+from app.modules.auth.dependencies import get_current_user
+from app.modules.users.models import User as UserModel
+from app.modules.patients.models import Patient as PatientModel
 
-from app.modules.billing.schemas import AccountCreate, AccountResponse, PaymentCreate, PaymentResponse
-# Importamos los modelos con los nombres exactos de tu models.py
+from app.modules.billing.schemas import (
+    AccountCreate, AccountResponse, PaymentCreate, PaymentResponse, PatientMini
+)
 from app.modules.billing.models import AccountReceivable, Payment
 
 router = APIRouter(prefix="/billing", tags=["Billing / Cuentas"])
 
-# ➕ 1. CREAR CUENTA POR COBRAR (NUEVO TRATAMIENTO/DEUDA)
+
+# ─── Helper: adjunta el paciente a cada cuenta (sin relationship ORM) ─────────
+async def _attach_patients(db: AsyncSession, accounts: List[AccountReceivable]) -> List[AccountResponse]:
+    patient_ids = {acc.patient_id for acc in accounts}
+    patients_map = {}
+
+    if patient_ids:
+        result = await db.execute(
+            select(PatientModel).where(PatientModel.id.in_(patient_ids))
+        )
+        for p in result.scalars().all():
+            patients_map[p.id] = PatientMini.model_validate(p)
+
+    responses = []
+    for acc in accounts:
+        resp = AccountResponse.model_validate(acc)
+        resp.patient = patients_map.get(acc.patient_id)
+        responses.append(resp)
+    return responses
+
+
+# ➕ 1. CREAR CUENTA POR COBRAR (uso manual, además de la generada por /complete)
 @router.post("/accounts", response_model=AccountResponse, status_code=status.HTTP_201_CREATED)
-async def create_account(account: AccountCreate, tenant_id: UUID, db: AsyncSession = Depends(get_db)):
+async def create_account(
+    account: AccountCreate,
+    db: AsyncSession = Depends(get_db),
+    current_user: UserModel = Depends(get_current_user),
+):
     account_data = account.model_dump()
-    account_data["tenant_id"] = tenant_id 
-    
-    # 💡 Lógica de negocio: Al nacer la cuenta, el saldo pendiente es igual al costo total
+    account_data["tenant_id"] = current_user.tenant_id  # 🚨 FIX: del usuario autenticado, no query param
     account_data["balance_due"] = account_data["total_amount"]
     account_data["status"] = "PENDING"
-    
+
     db_account = AccountReceivable(**account_data)
     db.add(db_account)
     try:
         await db.commit()
         await db.refresh(db_account)
-        return db_account
+        attached = await _attach_patients(db, [db_account])
+        return attached[0]
     except Exception as e:
         await db.rollback()
         raise HTTPException(
@@ -37,47 +65,92 @@ async def create_account(account: AccountCreate, tenant_id: UUID, db: AsyncSessi
             detail=f"Error al registrar la cuenta: {str(e)}"
         )
 
-# 🔍 2. OBTENER TODAS LAS CUENTAS DE LA CLÍNICA
+
+# 🔍 2. OBTENER TODAS LAS CUENTAS DE LA CLÍNICA (con filtro opcional de estado)
 @router.get("/accounts", response_model=List[AccountResponse])
-async def get_accounts_by_tenant(tenant_id: UUID, db: AsyncSession = Depends(get_db)):
-    # 💡 Usamos selectinload para cargar el historial de pagos sin romper la sesión asíncrona
+async def get_accounts_by_tenant(
+    status_filter: Optional[str] = None,  # PENDING | PARTIAL | PAID
+    db: AsyncSession = Depends(get_db),
+    current_user: UserModel = Depends(get_current_user),
+):
+    conditions = [
+        AccountReceivable.tenant_id == current_user.tenant_id,  # 🚨 FIX: seguro por sesión
+        AccountReceivable.is_active == True,
+    ]
+    if status_filter:
+        conditions.append(AccountReceivable.status == status_filter)
+
     query = (
         select(AccountReceivable)
-        .where(AccountReceivable.tenant_id == tenant_id)
+        .where(*conditions)
         .options(selectinload(AccountReceivable.payments))
+        .order_by(AccountReceivable.created_at.desc())
     )
     result = await db.execute(query)
     accounts = result.scalars().all()
-    return accounts
+    return await _attach_patients(db, accounts)
+
 
 # 🎯 3. OBTENER UNA CUENTA ESPECÍFICA CON SU HISTORIAL DE PAGOS
 @router.get("/accounts/{account_id}", response_model=AccountResponse)
-async def get_account(account_id: UUID, tenant_id: UUID, db: AsyncSession = Depends(get_db)):
+async def get_account(
+    account_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: UserModel = Depends(get_current_user),
+):
     query = (
         select(AccountReceivable)
         .where(
-            AccountReceivable.id == account_id, 
-            AccountReceivable.tenant_id == tenant_id
+            AccountReceivable.id == account_id,
+            AccountReceivable.tenant_id == current_user.tenant_id,  # 🚨 FIX
         )
         .options(selectinload(AccountReceivable.payments))
     )
     result = await db.execute(query)
     account = result.scalar_one_or_none()
-    
+
     if not account:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Cuenta no encontrada o no pertenece a esta clínica"
         )
-    return account
+
+    attached = await _attach_patients(db, [account])
+    return attached[0]
+
+
+# 🩺 3b. HISTORIAL DE CUENTAS DE UN PACIENTE ESPECÍFICO
+@router.get("/accounts/patient/{patient_id}", response_model=List[AccountResponse])
+async def get_accounts_by_patient(
+    patient_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: UserModel = Depends(get_current_user),
+):
+    query = (
+        select(AccountReceivable)
+        .where(
+            AccountReceivable.patient_id == patient_id,
+            AccountReceivable.tenant_id == current_user.tenant_id,
+        )
+        .options(selectinload(AccountReceivable.payments))
+        .order_by(AccountReceivable.created_at.desc())
+    )
+    result = await db.execute(query)
+    accounts = result.scalars().all()
+    return await _attach_patients(db, accounts)
+
 
 # 💰 4. REGISTRAR UN PAGO Y DESCONTAR SALDO
 @router.post("/accounts/{account_id}/payments", response_model=PaymentResponse, status_code=status.HTTP_201_CREATED)
-async def create_payment(account_id: UUID, tenant_id: UUID, payment: PaymentCreate, db: AsyncSession = Depends(get_db)):
-    # 1. Buscamos la cuenta
+async def create_payment(
+    account_id: UUID,
+    payment: PaymentCreate,
+    db: AsyncSession = Depends(get_db),
+    current_user: UserModel = Depends(get_current_user),
+):
     query = select(AccountReceivable).where(
         AccountReceivable.id == account_id,
-        AccountReceivable.tenant_id == tenant_id
+        AccountReceivable.tenant_id == current_user.tenant_id,  # 🚨 FIX
     )
     result = await db.execute(query)
     db_account = result.scalar_one_or_none()
@@ -88,30 +161,32 @@ async def create_payment(account_id: UUID, tenant_id: UUID, payment: PaymentCrea
             detail="Cuenta no encontrada o no pertenece a esta clínica"
         )
 
-    # 2. Validamos que el pago no sea mayor a la deuda restante (Opcional, pero recomendado)
+    if db_account.status == "PAID":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Esta cuenta ya fue saldada por completo."
+        )
+
     if payment.amount_paid > db_account.balance_due:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"El abono ({payment.amount_paid}) supera el saldo pendiente ({db_account.balance_due})"
         )
 
-    # 3. Creamos el registro del pago
     payment_data = payment.model_dump()
     payment_data["account_id"] = account_id
-    payment_data["tenant_id"] = tenant_id
+    payment_data["tenant_id"] = current_user.tenant_id  # 🚨 FIX
+    payment_data["created_by"] = current_user.id
 
     db_payment = Payment(**payment_data)
     db.add(db_payment)
-    
-    # 4. 💡 Actualizamos el estado financiero de la cuenta
+
     db_account.balance_due -= payment.amount_paid
-    
-    # Si la deuda llegó a cero, la marcamos como pagada
     if db_account.balance_due == 0:
         db_account.status = "PAID"
     elif db_account.balance_due < db_account.total_amount:
         db_account.status = "PARTIAL"
-        
+
     try:
         await db.commit()
         await db.refresh(db_payment)

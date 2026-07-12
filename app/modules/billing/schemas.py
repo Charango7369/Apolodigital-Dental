@@ -1,5 +1,5 @@
 # app/modules/billing/schemas.py
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_serializer
 from uuid import UUID
 from typing import Optional, List
 from datetime import datetime
@@ -22,6 +22,23 @@ class PaymentResponse(BaseModel):
     created_at: datetime
     created_by: Optional[UUID]
 
+    # 🚨 FIX: Decimal se serializa como string en JSON por defecto.
+    # Lo convertimos a float para que el frontend pueda sumar/formatear sin NaN.
+    @field_serializer('amount_paid')
+    def serialize_amount_paid(self, v: Decimal, _info):
+        return float(v)
+
+    model_config = {
+        "from_attributes": True
+    }
+
+# --- MINI-PACIENTE (para no sobrecargar la respuesta) ---
+class PatientMini(BaseModel):
+    id: UUID
+    first_name: str
+    last_name: str
+    phone: Optional[str] = None
+
     model_config = {
         "from_attributes": True
     }
@@ -40,13 +57,19 @@ class AccountResponse(BaseModel):
     status: str
     description: str
     created_at: datetime
-    payments: List[PaymentResponse] = [] # Incluimos el historial de abonos
+    payments: List[PaymentResponse] = []
+    patient: Optional[PatientMini] = None  # 🚨 Nombre del paciente para la UI
+
+    # 🚨 FIX: mismo problema — Decimal a float para evitar NaN en el frontend
+    @field_serializer('total_amount', 'balance_due')
+    def serialize_amounts(self, v: Decimal, _info):
+        return float(v)
 
     model_config = {
         "from_attributes": True
     }
+
 class InvoiceCreate(BaseModel):
     account_id: UUID
     issue_date: datetime
     due_date: datetime
-    # ... otros campos que necesites ...

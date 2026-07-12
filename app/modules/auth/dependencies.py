@@ -1,7 +1,7 @@
 # app/modules/auth/dependencies.py
 from typing import List
 from uuid import UUID
-
+import traceback
 from fastapi import HTTPException, status, Depends
 from fastapi.security import OAuth2PasswordBearer
 from jose import jwt, JWTError
@@ -21,8 +21,8 @@ async def get_current_user(
     db: AsyncSession = Depends(get_db)
 ) -> UserModel:
     """
-    Dependencia global para proteger rutas. Lee el token JWT, lo valida,
-    y extrae el usuario completo (incluyendo su tenant_id en secreto).
+    Dependencia global blindada. 
+    Atrapa errores de formato, UUID y base de datos sin generar un 500.
     """
     credentials_exception = HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
@@ -31,32 +31,46 @@ async def get_current_user(
     )
     
     try:
-        # 🪙 1. Desencriptamos el Token JWT recibido en las cabeceras
+        # 1. Decodificación base
         payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
-        user_id: str = payload.get("sub")
+        user_id_str: str = payload.get("sub")
         
-        if user_id is None:
+        if user_id_str is None:
             raise credentials_exception
             
-        token_data = TokenData(user_id=user_id)
+        # 🛡️ 2. SANITIZACIÓN CRÍTICA: Intentamos convertir el string a UUID de forma segura
+        try:
+            valid_uuid = UUID(user_id_str)
+        except ValueError:
+            print(f"\n❌ [ADVERTENCIA DE SEGURIDAD] El token contiene '{user_id_str}', que NO es un UUID válido. Rechazando acceso.\n")
+            raise credentials_exception
+
     except JWTError:
         raise credentials_exception
 
-    # 🔍 2. Buscamos de forma asíncrona al dueño del token en Postgres
-    query = select(UserModel).where(UserModel.id == UUID(token_data.user_id))
-    result = await db.execute(query)
-    user = result.scalar_one_or_none()
+    # 🔍 3. Búsqueda en la base de datos protegida
+    try:
+        query = select(UserModel).where(UserModel.id == valid_uuid)
+        result = await db.execute(query)
+        user = result.scalar_one_or_none()
+    except Exception as e:
+        print("\n❌ ====== ERROR DE BASE DE DATOS EN AUTENTICACIÓN ====== ❌")
+        traceback.print_exc()
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, 
+            detail="Fallo interno al consultar la identidad"
+        )
 
-    # 🛑 3. Validamos que exista y que no esté baneado/inactivo
+    # 🛑 4. Validación final de existencia y estado
     if user is None:
         raise credentials_exception
+        
     if not user.is_active:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST, 
             detail="El usuario se encuentra inactivo"
         )
         
-    # 🎯 ¡ÉXITO! Devolvemos el objeto usuario con su respectivo tenant_id
     return user
 
 def require_role(allowed_roles: List[str]):
