@@ -3,7 +3,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-from fastapi.routing import APIRoute # <-- Añadido para la Opción B
+from fastapi.routing import APIRoute 
 
 from app.core.config import settings
 from app.core.logging import logger
@@ -28,6 +28,8 @@ from app.modules.reports.router import router as reports_router
 from app.modules.files.router import router as files_router
 from app.modules.tenants.router import router as tenants_router
 from app.modules.health.router import router as health_router
+
+from app.modules.dashboard.router import router as dashboard_router
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -56,9 +58,18 @@ app = FastAPI(
 app.add_middleware(ErrorHandlingMiddleware)
 app.add_middleware(LoggingMiddleware)
 app.add_middleware(TenantMiddleware)
+
+# --- Configuración CORS segura ---
+origins = [
+    "http://localhost:5173",   # Vite
+    "http://localhost:3000",   # Create React App
+    "http://127.0.0.1:5173",   # Variante con 127.0.0.1
+    "http://127.0.0.1:3000",   # Variante con 127.0.0.1
+]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=origins,        # Lista explícita de orígenes permitidos
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -80,6 +91,8 @@ app.include_router(notifications_router)
 app.include_router(reports_router)
 app.include_router(files_router)
 app.include_router(health_router)
+
+app.include_router(dashboard_router)
 
 # =========================================================
 # Root Endpoint
@@ -122,8 +135,6 @@ async def global_exception_handler(request, exc):
 # =========================================================
 # OpenAPI Operation ID Simplification (Opción B)
 # =========================================================
-# Esto evita colisiones iterando sobre todas las rutas cargadas
-# y asignando el nombre de la función en Python como ID único.
 for route in app.routes:
     if isinstance(route, APIRoute):
         route.operation_id = route.name

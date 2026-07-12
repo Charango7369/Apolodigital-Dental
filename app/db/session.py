@@ -6,6 +6,7 @@ engine = create_async_engine(
     settings.DATABASE_URL, # Tu variable DB_URL de Railway
     echo=False,
     pool_pre_ping=True,
+    pool_recycle=3600   # Opcional: Recicla conexiones viejas cada hora
 )
 
 # 2. Crear la fábrica de sesiones
@@ -22,3 +23,4 @@ async def get_db():
             yield session
         finally:
             await session.close()
+ 
