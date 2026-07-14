@@ -65,6 +65,7 @@ origins = [
     "http://localhost:3000",   # Create React App
     "http://127.0.0.1:5173",   # Variante con 127.0.0.1
     "http://127.0.0.1:3000",   # Variante con 127.0.0.1
+    "https://dental-frontend.edwinjrivero.workers.dev",  # ← AGREGA ESTA LÍNEA
 ]
 
 app.add_middleware(
