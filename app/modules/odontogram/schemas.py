@@ -26,6 +26,12 @@ class OdontogramCreate(BaseModel):
                 raise ValueError(f"El número de diente {tooth_num} no es un código válido del sistema FDI.")
         return v
 
+# 🚨 NUEVO: permite editar únicamente las notas de un registro ya guardado.
+# No se permite modificar teeth_data aquí — cambiar el estado dental siempre
+# debe crear una nueva evolución para no perder trazabilidad clínica.
+class OdontogramUpdate(BaseModel):
+    description: Optional[str] = Field(None, max_length=2000, description="Notas u observaciones a actualizar")
+
 class OdontogramResponse(BaseModel):
     id: UUID
     patient_id: UUID
