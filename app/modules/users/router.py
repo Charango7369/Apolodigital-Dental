@@ -30,7 +30,7 @@ async def get_my_profile(current_user: UserModel = Depends(get_current_user)):
 @router.get("", response_model=List[UserResponse])
 async def get_my_clinic_users(
     db: AsyncSession = Depends(get_db),
-    current_user: UserModel = Depends(require_admin),
+    current_user: UserModel = Depends(get_current_user),
 ):
     query = select(UserModel).where(
         UserModel.tenant_id == current_user.tenant_id

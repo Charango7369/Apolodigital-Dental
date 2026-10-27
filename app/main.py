@@ -27,6 +27,7 @@ from app.modules.notifications.router import router as notifications_router
 from app.modules.reports.router import router as reports_router
 from app.modules.files.router import router as files_router
 from app.modules.tenants.router import router as tenants_router
+from app.modules.tenants.staff_router import router as clinics_staff_router, tenants_staff_router
 from app.modules.health.router import router as health_router
 
 from app.modules.dashboard.router import router as dashboard_router
@@ -83,6 +84,8 @@ app.add_middleware(
 app.include_router(auth_router)
 app.include_router(users_router)
 app.include_router(tenants_router)
+app.include_router(clinics_staff_router)
+app.include_router(tenants_staff_router)
 app.include_router(patients_router)
 app.include_router(appointments_router)
 app.include_router(inventory_router)

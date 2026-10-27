@@ -116,4 +116,4 @@ async def update_odontogram_notes(
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"Error al actualizar las notas: {str(e)}"
-        )
+        ) 

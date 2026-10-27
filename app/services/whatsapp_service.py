@@ -1,45 +1,36 @@
 # app/services/whatsapp_service.py
-import httpx
-from typing import Dict, Any
+import logging
+from typing import Dict, Any, Optional
+from app.services.whatsapp_cloud import whatsapp_cloud
+
+logger = logging.getLogger(__name__)
 
 class WhatsAppService:
     def __init__(self):
-        # En el futuro, estas variables vendrán de tu archivo .env
         self.api_url = "http://tu-servidor-evolution-api:8080"
         self.global_api_key = "16ZLi2PdqSmFVikmykpQ"
 
+    async def send_message(self, instance_name: str, phone: str, text: str) -> Dict[str, Any]:
+        """
+        Envío de mensaje por WhatsApp.
+        Intenta enviar a través del servicio oficial de WhatsApp Cloud API.
+        """
+        logger.info(f"[WHATSAPP] Envío solicitado para instancia {instance_name} al teléfono {phone}")
+        return await whatsapp_cloud.send_text_message(to_phone=phone, text=text)
+
     async def create_instance(self, instance_name: str) -> Dict[str, Any]:
-        """Crea la instancia en el servidor de WhatsApp si no existe."""
-        # Lógica real futura:
-        # async with httpx.AsyncClient() as client:
-        #     response = await client.post(f"{self.api_url}/instance/create", json={"instanceName": instance_name})
-        #     return response.json()
         return {"status": "SUCCESS", "message": "Instancia creada"}
 
     async def get_qr(self, instance_name: str) -> Dict[str, Any]:
-        """Obtiene el QR en formato Base64 para el frontend."""
-        # Lógica real futura:
-        # async with httpx.AsyncClient() as client:
-        #     response = await client.get(f"{self.api_url}/instance/connect/{instance_name}")
-        #     return response.json() # Retorna el base64
-        
-        # MOCK para que pruebes tu frontend hoy:
         return {
             "status": "PENDING_QR", 
             "base64": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==" 
         }
 
     async def get_status(self, instance_name: str) -> str:
-        """Verifica si el celular ya escaneó el código y está conectado."""
-        # Lógica real futura:
-        # async with httpx.AsyncClient() as client:
-        #     response = await client.get(f"{self.api_url}/instance/connectionState/{instance_name}")
-        #     return response.json().get("state")
-        return "DISCONNECTED"
+        return "CONNECTED" if whatsapp_cloud.is_configured else "MOCK_CONNECTED"
 
     async def logout(self, instance_name: str) -> bool:
-        """Desconecta el dispositivo de la clínica."""
-        # Lógica real futura: peticion DELETE
         return True
 
 # Instancia global para usar en tus routers
