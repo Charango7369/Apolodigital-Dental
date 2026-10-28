@@ -1,0 +1,63 @@
+# .dockerignore - Prevención Forense de Fuga de Secretos y Optimización de Capas Docker
+
+# Control de Versiones y Metadatos CI/CD
+.git/
+.github/
+.gitignore
+.gitattributes
+
+# Secretos y Variables de Entorno (NUNCA incluir en imágenes Docker)
+.env
+.env.*
+!.env.example
+
+# Caché y Bytecode de Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+
+# Entornos Virtuales Locales
+venv/
+.venv/
+env/
+ENV/
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Pruebas, Cobertura y Benchmarks (No requeridos en imagen de runtime de producción)
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+tests/
+scratch/
+
+# IDEs, Editores y SO
+.idea/
+.vscode/
+*.sublime-project
+*.sublime-workspace
+.DS_Store
+Thumbs.db
+
+# Logs y Archivos Temporales
+*.log
+logs/
+tmp/
+*.swp
+*.swo
