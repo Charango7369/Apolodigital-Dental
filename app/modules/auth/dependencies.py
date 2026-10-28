@@ -11,6 +11,11 @@ from sqlalchemy.future import select
 from app.db.session import get_db
 from app.core.security import SECRET_KEY, ALGORITHM
 from app.core.cache import token_cache
+from app.core.tenant_context import (
+    set_current_tenant_context,
+    set_bypass_rls,
+    apply_db_tenant_context
+)
 from app.modules.users.models import User as UserModel
 from app.modules.auth.schemas import TokenData
 
@@ -31,6 +36,7 @@ async def get_current_user(
     3. Comprueba revocación distribuida mediante JTI en caché/Redis.
     4. Sanitiza y valida el identificador UUID del sujeto.
     5. Consulta la base de datos y verifica que la cuenta esté activa.
+    6. Sincroniza de forma determinista el contexto RLS de PostgreSQL para la sesión activa.
     """
     credentials_exception = HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
@@ -100,6 +106,16 @@ async def get_current_user(
             status_code=status.HTTP_400_BAD_REQUEST, 
             detail="El usuario se encuentra inactivo"
         )
+
+    # 🔐 7. FASE 5: Sincronización estricta de RLS en la conexión activa de PostgreSQL
+    user_roles = user.roles if isinstance(user.roles, list) else []
+    is_superadmin = "SUPER_ADMIN" in user_roles
+    
+    set_current_tenant_context(user.tenant_id)
+    if is_superadmin:
+        set_bypass_rls(True)
+        
+    await apply_db_tenant_context(db, tenant_id=user.tenant_id, bypass=is_superadmin)
         
     return user
 

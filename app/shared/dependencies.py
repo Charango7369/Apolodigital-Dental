@@ -7,6 +7,8 @@ from fastapi import Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 
+from app.db.session import get_db
+from app.core.tenant_context import apply_db_tenant_context
 from app.modules.auth.dependencies import get_current_user, require_role
 from app.modules.users.models import User as UserModel
 
@@ -31,6 +33,19 @@ async def get_current_tenant_id(
             detail="Operación no autorizada: usuario sin clínica asignada."
         )
     return current_user.tenant_id
+
+
+async def get_tenant_db(
+    db: AsyncSession = Depends(get_db),
+    current_user: UserModel = Depends(get_current_user)
+) -> AsyncSession:
+    """
+    Dependencia que garantiza que la sesión de base de datos esté
+    configurada con el contexto RLS del tenant del usuario actual.
+    """
+    is_superadmin = "SUPER_ADMIN" in (current_user.roles if isinstance(current_user.roles, list) else [])
+    await apply_db_tenant_context(db, tenant_id=current_user.tenant_id, bypass=is_superadmin)
+    return db
 
 
 async def verify_tenant_entity(
