@@ -19,7 +19,7 @@ from app.modules.appointments.schemas import (
     AppointmentCompleteRequest,
     AppointmentMetricsToday,
 )
-from app.modules.auth.dependencies import get_current_user
+from app.modules.auth.dependencies import get_current_user, require_role
 from app.modules.users.models import User as UserModel
 from app.modules.patients.models import Patient as PatientModel
 from app.services.whatsapp_service import wa_service
@@ -28,7 +28,7 @@ from app.modules.billing.models import AccountReceivable
 
 router = APIRouter(prefix="/appointments", tags=["Appointments"])
 
-# ➕ 1. AGENDAR CITA (Con validación atómica de solapamientos)
+# ➕ 1. AGENDAR CITA (Con validación atómica de solapamientos y aislamiento multi-tenant)
 @router.post("", response_model=AppointmentResponse, status_code=status.HTTP_201_CREATED)
 async def create_appointment(
     payload: AppointmentCreate,
@@ -37,6 +37,32 @@ async def create_appointment(
 ):
     try:
         ahora = datetime.now(timezone.utc)
+
+        # 🛡️ ANTI-BOLA: Validar que el paciente pertenezca a la clínica del usuario autenticado
+        patient_query = select(PatientModel).where(
+            PatientModel.id == payload.patient_id,
+            PatientModel.tenant_id == current_user.tenant_id,
+            PatientModel.is_active == True
+        )
+        patient_exists = (await db.execute(patient_query)).scalar_one_or_none()
+        if not patient_exists:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Paciente no encontrado en esta clínica."
+            )
+
+        # 🛡️ ANTI-BOLA: Validar que el odontólogo pertenezca a la clínica del usuario autenticado
+        doctor_query = select(UserModel).where(
+            UserModel.id == payload.doctor_id,
+            UserModel.tenant_id == current_user.tenant_id,
+            UserModel.is_active == True
+        )
+        doctor_exists = (await db.execute(doctor_query)).scalar_one_or_none()
+        if not doctor_exists:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Odontólogo no encontrado en esta clínica."
+            )
 
         # 🛡️ ALGORITMO ANTI-SOLAPAMIENTO
         overlap_query = select(AppointmentModel).where(
@@ -394,14 +420,14 @@ async def export_appointment_ics(
         headers={"Content-Disposition": f"attachment; filename=cita_{apt.id}.ics"}
     )
 
-# 🏁 8. FINALIZAR CITA, GENERAR COBRO Y ENVIAR WHATSAPP (Unificado)
+# 🏁 8. FINALIZAR CITA, GENERAR COBRO Y ENVIAR WHATSAPP (Unificado - Requiere DOCTOR o ADMIN)
 @router.post("/{appointment_id}/complete", status_code=status.HTTP_200_OK)
 async def complete_appointment_and_bill(
     appointment_id: UUID,
     payload: AppointmentCompleteRequest,
     background_tasks: BackgroundTasks,
     db: AsyncSession = Depends(get_db),
-    current_user: UserModel = Depends(get_current_user)
+    current_user: UserModel = Depends(require_role(["ADMIN", "DOCTOR"]))
 ):
     query = select(AppointmentModel).options(
         joinedload(AppointmentModel.patient),

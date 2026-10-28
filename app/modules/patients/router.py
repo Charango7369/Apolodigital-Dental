@@ -18,7 +18,9 @@ from app.modules.patients.schemas import (
     PatientUpdate, 
     PaginatedPatientResponse
 )
-from app.modules.auth.dependencies import get_current_user
+from app.modules.auth.dependencies import get_current_user, require_role
+
+require_admin = require_role(['ADMIN'])
 from app.modules.users.models import User as UserModel
 
 router = APIRouter(prefix="/patients", tags=["Patients"])
@@ -89,7 +91,7 @@ async def get_my_patients(
 
         # 2. Extraer solo la página solicitada
         query = select(PatientModel).where(*base_conditions)
-        query = query.order_by(PatientModel.created_at.desc()).offset(skip).limit(limit)
+        query = query.order_by(PatientModel.created_at.desc()).offset(skip).limit(min(max(1, limit), 100))
         
         result = await db.execute(query)
         patients = result.scalars().all()
@@ -176,7 +178,7 @@ async def update_patient(
 async def archive_patient(
     patient_id: UUID,
     db: AsyncSession = Depends(get_db),
-    current_user: UserModel = Depends(get_current_user)
+    current_user: UserModel = Depends(require_admin)
 ):
     query = select(PatientModel).where(
         PatientModel.id == patient_id,

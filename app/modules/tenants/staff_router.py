@@ -12,6 +12,8 @@ from sqlalchemy.future import select
 
 from app.db.session import get_db
 import app.models
+from app.core.rate_limiter import rate_limiter_reset
+from app.modules.auth.service import AuthService
 from app.modules.tenants.staff_schemas import (
     ClinicStaffCreate,
     ClinicStaffUpdate,
@@ -52,10 +54,8 @@ async def require_platform_or_clinic_admin(
     return current_user
 
 
-# Router bajo /clinics
-router = APIRouter(prefix="/clinics", tags=["Clinic Staff"])
-# Alias bajo /tenants
-tenants_staff_router = APIRouter(prefix="/tenants", tags=["Clinic Staff"])
+router = APIRouter(prefix="/clinics", tags=["Clinics Staff"])
+tenants_staff_router = APIRouter(prefix="/tenants", tags=["Tenants Staff"])
 
 
 def register_staff_routes(r: APIRouter):
@@ -102,29 +102,24 @@ def register_staff_routes(r: APIRouter):
                 email=payload.email.lower().strip(),
                 hashed_password=hash_password(payload.password),
                 roles=payload.validate_roles(),
-                tenant_id=clinic_id,
                 is_active=payload.is_active,
+                tenant_id=clinic_id,
             )
-
             db.add(new_user)
             await db.commit()
             await db.refresh(new_user)
             return new_user
-
         except HTTPException:
-            await db.rollback()
             raise
         except Exception as e:
-            await db.rollback()
             traceback.print_exc()
             raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"Error al registrar miembro del personal: {str(e)}"
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"Error interno al crear personal: {str(e)}",
             )
 
-    # 🔄 3. EDITAR DATOS DEL PERSONAL DE LA CLÍNICA (PUT / PATCH)
+    # ✏️ 3. EDITAR INFORMACIÓN DE PERSONAL
     @r.put("/{clinic_id}/staff/{user_id}", response_model=ClinicStaffResponse)
-    @r.patch("/{clinic_id}/staff/{user_id}", response_model=ClinicStaffResponse)
     async def update_clinic_staff(
         clinic_id: UUID,
         user_id: UUID,
@@ -165,8 +160,12 @@ def register_staff_routes(r: APIRouter):
         await db.refresh(target_user)
         return target_user
 
-    # 🔑 4. RESETEAR CONTRASEÑA (MANUAL O GENERACIÓN TEMPORAL SEGURA)
-    @r.post("/{clinic_id}/staff/{user_id}/reset-password", response_model=PasswordResetResponse)
+    # 🔑 4. RESETEAR CONTRASEÑA CON RATE LIMITING (5 INTENTOS / HORA) Y REVOCACIÓN DE SESIÓN
+    @r.post(
+        "/{clinic_id}/staff/{user_id}/reset-password", 
+        response_model=PasswordResetResponse,
+        dependencies=[Depends(rate_limiter_reset)]
+    )
     async def reset_clinic_staff_password(
         clinic_id: UUID,
         user_id: UUID,
@@ -194,6 +193,9 @@ def register_staff_routes(r: APIRouter):
         if hasattr(target_user, "updated_at"):
             target_user.updated_at = datetime.now(timezone.utc)
 
+        # 🛑 Medida defensiva: Revocar todas las sesiones activas del usuario cuya contraseña fue reseteada
+        await AuthService.revoke_all_user_sessions(db, target_user.id)
+
         await db.commit()
         await db.refresh(target_user)
 
@@ -201,7 +203,6 @@ def register_staff_routes(r: APIRouter):
             message=msg,
             user_id=target_user.id,
             temporary_password=temporary_pwd,
-            hashed_password=target_user.hashed_password,
         )
 
 

@@ -13,7 +13,6 @@ class ClinicStaffResponse(BaseModel):
     roles: List[str]
     tenant_id: UUID
     is_active: bool
-    hashed_password: str
     created_at: Optional[datetime] = None
 
     model_config = {
@@ -50,4 +49,3 @@ class PasswordResetResponse(BaseModel):
     message: str
     user_id: UUID
     temporary_password: Optional[str] = None
-    hashed_password: str

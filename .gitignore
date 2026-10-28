@@ -25,7 +25,8 @@ Thumbs.db
 
 dental.db
 *.db 
-scripts/
+scripts/*
+!scripts/generate_secrets.py
 temp_alembic/
 
 *.sql
