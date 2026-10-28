@@ -41,14 +41,15 @@ class LoginResponse(BaseModel):
     refresh_token: Optional[str] = None
     token_type: str = "bearer"
     user: Optional[UserResponse] = None
+    csrf_token: Optional[str] = None
     mfa_required: bool = False
     mfa_token: Optional[str] = None
     message: Optional[str] = None
 
 
 class RefreshTokenRequest(BaseModel):
-    """Petición de rotación de tokens (RTR)."""
-    refresh_token: str = Field(..., min_length=20, description="Token de refresco criptográfico.")
+    """Petición de rotación de tokens (RTR). Soporta cuerpo JSON o Cookie HttpOnly."""
+    refresh_token: Optional[str] = Field(None, description="Token de refresco. Opcional si se envía en cookie HttpOnly.")
 
 
 class TokenRefreshResponse(BaseModel):
@@ -56,6 +57,8 @@ class TokenRefreshResponse(BaseModel):
     access_token: str
     refresh_token: str
     token_type: str = "bearer"
+    csrf_token: Optional[str] = None
+    user: Optional[UserResponse] = None
 
 
 class LogoutRequest(BaseModel):

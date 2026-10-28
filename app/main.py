@@ -11,11 +11,12 @@ from app.core.logging import logger
 from app.middlewares.logging_middleware import LoggingMiddleware
 from app.middlewares.tenant_middleware import TenantMiddleware
 from app.middlewares.error_middleware import ErrorHandlingMiddleware
+from app.middlewares.csrf_middleware import CSRFMiddleware
 
-# --- Modelos globales (necesario para que Alembic los detecte si se importa este archivo) ---
+# --- Modelos globales ---
 import app.models 
 
-# Imports limpios y sin duplicados
+# Routers
 from app.modules.auth.router import router as auth_router
 from app.modules.users.router import router as users_router
 from app.modules.patients.router import router as patients_router
@@ -29,17 +30,11 @@ from app.modules.files.router import router as files_router
 from app.modules.tenants.router import router as tenants_router
 from app.modules.tenants.staff_router import router as clinics_staff_router, tenants_staff_router
 from app.modules.health.router import router as health_router
-
 from app.modules.dashboard.router import router as dashboard_router
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """
-    Startup / Shutdown Events
-    """
     logger.info("🚀 Starting Dental SaaS Backend")
-    # Base.metadata.create_all ha sido eliminado. 
-    # La responsabilidad del DDL ahora es 100% de Alembic.
     yield
     logger.info("🛑 Shutting down Dental SaaS Backend")
 
@@ -53,32 +48,33 @@ app = FastAPI(
 )
 
 # =========================================================
-# Middlewares
+# Middlewares (El orden importa: el último añadido es el primero en recibir la petición)
 # =========================================================
 
 app.add_middleware(ErrorHandlingMiddleware)
 app.add_middleware(LoggingMiddleware)
 app.add_middleware(TenantMiddleware)
+app.add_middleware(CSRFMiddleware)
 
-# --- Configuración CORS segura ---
+# --- Configuración CORS segura (Outermost para responder preflights OPTIONS) ---
 origins = [
     "http://localhost:5173",   # Vite
     "http://localhost:3000",   # Create React App
     "http://127.0.0.1:5173",   # Variante con 127.0.0.1
     "http://127.0.0.1:3000",   # Variante con 127.0.0.1
-    "https://dental-frontend.edwinjrivero.workers.dev",  # ← AGREGA ESTA LÍNEA
+    "https://dental-frontend.edwinjrivero.workers.dev",
 ]
 
 app.add_middleware(
     CORSMiddleware,
     allow_origins=origins,        # Lista explícita de orígenes permitidos
-    allow_credentials=True,
+    allow_credentials=True,       # Requerido para envío de Cookies HttpOnly
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
 # =========================================================
-# Routers (Inclusiones únicas)
+# Routers
 # =========================================================
 
 app.include_router(auth_router)
@@ -95,7 +91,6 @@ app.include_router(notifications_router)
 app.include_router(reports_router)
 app.include_router(files_router)
 app.include_router(health_router)
-
 app.include_router(dashboard_router)
 
 # =========================================================
@@ -137,7 +132,7 @@ async def global_exception_handler(request, exc):
     )
 
 # =========================================================
-# OpenAPI Operation ID Simplification (Opción B)
+# OpenAPI Operation ID Simplification
 # =========================================================
 for route in app.routes:
     if isinstance(route, APIRoute):

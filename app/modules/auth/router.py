@@ -1,15 +1,17 @@
 # app/modules/auth/router.py
 import json
 import logging
+from typing import Optional
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from fastapi.security import OAuth2PasswordRequestForm
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 
 from app.db.session import get_db
 from app.core.config import settings
+from app.core.csrf import generate_csrf_token
 from app.core.rate_limiter import (
     get_client_ip, 
     rate_limiter_login, 
@@ -62,16 +64,52 @@ def _build_user_response(user: UserModel) -> UserResponse:
     )
 
 
+def _set_auth_cookies(response: Response, refresh_token: str, csrf_token: str) -> None:
+    """Configura las cookies de sesión seguras: Refresh Token HttpOnly y CSRF Token legible por JS."""
+    max_age = settings.REFRESH_TOKEN_EXPIRE_DAYS * 86400
+
+    # Cookie HttpOnly blindada contra XSS (JavaScript NO puede leerla)
+    response.set_cookie(
+        key="refresh_token",
+        value=refresh_token,
+        max_age=max_age,
+        expires=max_age,
+        httponly=True,
+        secure=True,
+        samesite="none",
+        path="/",
+    )
+
+    # Cookie Anti-CSRF (Double Submit Cookie: JavaScript la lee y la copia a la cabecera X-CSRF-Token)
+    response.set_cookie(
+        key="csrf_token",
+        value=csrf_token,
+        max_age=max_age,
+        expires=max_age,
+        httponly=False,
+        secure=True,
+        samesite="none",
+        path="/",
+    )
+
+
+def _clear_auth_cookies(response: Response) -> None:
+    """Elimina las cookies de sesión."""
+    response.delete_cookie(key="refresh_token", path="/", secure=True, samesite="none")
+    response.delete_cookie(key="csrf_token", path="/", secure=True, samesite="none")
+
+
 @router.post("/login", response_model=LoginResponse, dependencies=[Depends(rate_limiter_login)])
 async def login_for_access_token(
     request: Request,
+    response: Response,
     form_data: OAuth2PasswordRequestForm = Depends(),
     db: AsyncSession = Depends(get_db),
 ):
     """
-    Inicio de sesión protegido con Rate Limiting distribuido (5 intentos / 15 min):
-    - Si el usuario no tiene MFA: emite par Access Token (15 min) + Refresh Token (7 días RTR).
-    - Si el usuario tiene MFA activado: emite token restringido con scope 'mfa_pending' (10 min).
+    Inicio de sesión con almacenamiento seguro en cookies HttpOnly y protección Anti-CSRF:
+    - Emite par Access Token (en memoria / body) + Refresh Token en Cookie HttpOnly Secure.
+    - Genera token CSRF criptográfico en cookie accesible para el frontend.
     """
     credentials_exception = HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
@@ -82,7 +120,7 @@ async def login_for_access_token(
     clean_email = (form_data.username or "").strip().lower()
     client_ip = get_client_ip(request)
 
-    # Rate limiting secundario por cuenta específica + IP para evitar ataques dirigidos de diccionario
+    # Rate limiting secundario por cuenta específica + IP
     account_key = f"login_account:{clean_email}:{client_ip}"
     allowed, _, retry_after = await rate_limit_storage.is_allowed(
         account_key,
@@ -103,7 +141,7 @@ async def login_for_access_token(
         result = await db.execute(query)
         user = result.scalar_one_or_none()
 
-        # 🛑 2. Validación en tiempo constante (mitigación de timing attack y enumeración)
+        # 🛑 2. Validación en tiempo constante
         if not user or not user.is_active:
             verify_password(form_data.password, "$2b$12$e80yqZ65yCfqGZ2gTf5GVuF1aKsmZ2Oq7m9eO0u9R6hD4uB8rE.8G")
             raise credentials_exception
@@ -125,17 +163,22 @@ async def login_for_access_token(
                 message="Autenticación en dos pasos requerida. Ingrese su código TOTP de 6 dígitos.",
             )
 
-        # 🎫 5. Credenciales válidas sin MFA: Generar Access Token (15m) + Refresh Token (RTR)
+        # 🎫 5. Credenciales válidas: Generar Access Token (15m) + Refresh Token (RTR)
         access_token, refresh_token = await AuthService.create_user_session(
             db, user, client_ip=client_ip, user_agent=user_agent
         )
-        user_response = _build_user_response(user)
+        csrf_token = generate_csrf_token()
 
-        logger.info(f"Autenticación directa exitosa para usuario {user.id} en tenant {user.tenant_id}")
+        # 🍪 6. Inyectar Cookies Seguras (HttpOnly para refresh, legible para CSRF)
+        _set_auth_cookies(response, refresh_token, csrf_token)
+
+        user_response = _build_user_response(user)
+        logger.info(f"Autenticación exitosa para usuario {user.id} en tenant {user.tenant_id}")
 
         return LoginResponse(
             access_token=access_token,
             refresh_token=refresh_token,
+            csrf_token=csrf_token,
             token_type="bearer",
             user=user_response,
         )
@@ -152,41 +195,68 @@ async def login_for_access_token(
 
 @router.post("/refresh", response_model=TokenRefreshResponse)
 async def refresh_access_token(
-    payload: RefreshTokenRequest,
     request: Request,
+    response: Response,
+    payload: Optional[RefreshTokenRequest] = None,
     db: AsyncSession = Depends(get_db),
 ):
     """
     Rotación Automática de Tokens de Refresco (RTR):
-    - Intercambia un Refresh Token válido por un nuevo par de tokens.
-    - Si se presenta un token ya consumido o revocado, activa la Detección Forense de Reuso
-      e invalida inmediatamente toda la familia de sesiones activas.
+    - Extrae el token de refresco del cuerpo JSON o de la cookie HttpOnly.
+    - Emite un nuevo Access Token y rota el Refresh Token actualizando las cookies.
     """
+    raw_refresh_token = (payload.refresh_token if payload and payload.refresh_token else None) or request.cookies.get("refresh_token")
+
+    if not raw_refresh_token:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Token de refresco no encontrado en cuerpo ni en cookie HttpOnly.",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
     client_ip = get_client_ip(request)
     user_agent = request.headers.get("user-agent")
 
-    access_token, new_refresh_token, _ = await AuthService.rotate_refresh_token(
-        db, payload.refresh_token, client_ip=client_ip, user_agent=user_agent
+    access_token, new_refresh_token, user = await AuthService.rotate_refresh_token(
+        db, raw_refresh_token, client_ip=client_ip, user_agent=user_agent
     )
+
+    csrf_token = generate_csrf_token()
+    _set_auth_cookies(response, new_refresh_token, csrf_token)
 
     return TokenRefreshResponse(
         access_token=access_token,
         refresh_token=new_refresh_token,
+        csrf_token=csrf_token,
         token_type="bearer",
+        user=_build_user_response(user),
     )
+
+
+@router.get("/me", response_model=UserResponse)
+async def get_current_user_profile(
+    current_user: UserModel = Depends(get_current_user),
+):
+    """
+    Rehidratación de Sesión:
+    Permite al frontend obtener el perfil del usuario autenticado tras una inicialización silenciosa.
+    """
+    return _build_user_response(current_user)
 
 
 @router.post("/logout", response_model=GenericStatusResponse)
 async def logout(
     request: Request,
-    payload: LogoutRequest = None,
+    response: Response,
+    payload: Optional[LogoutRequest] = None,
     current_user: UserModel = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
     """
     Cierre de sesión seguro:
-    - Revoca el Access Token actual en la caché distribuida por su identificador único JTI.
-    - Si se provee un refresh_token, invalida la familia completa en base de datos.
+    - Revoca el Access Token en caché distribuida (JTI).
+    - Revoca el Refresh Token en base de datos.
+    - Limpia las cookies HttpOnly y Anti-CSRF del navegador.
     """
     auth_header = request.headers.get("Authorization", "")
     if auth_header.startswith("Bearer "):
@@ -199,8 +269,11 @@ async def logout(
         except Exception:
             pass
 
-    if payload and payload.refresh_token:
-        await AuthService.revoke_session_by_token(db, payload.refresh_token)
+    raw_refresh = (payload.refresh_token if payload and payload.refresh_token else None) or request.cookies.get("refresh_token")
+    if raw_refresh:
+        await AuthService.revoke_session_by_token(db, raw_refresh)
+
+    _clear_auth_cookies(response)
 
     return GenericStatusResponse(
         success=True,
@@ -217,15 +290,9 @@ async def setup_mfa(
     current_user: UserModel = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """
-    Paso 1 de activación MFA:
-    Genera un secreto criptográfico Base32 y el URI estándar otpauth://
-    El usuario debe escanear el QR o ingresar el secreto en su app autenticadora.
-    MFA permanece inactivo hasta que se valide el primer código con /auth/mfa/verify.
-    """
+    """Paso 1 de activación MFA."""
     secret = generate_totp_secret()
     
-    # Almacenar secreto temporal en usuario (no activo hasta confirmar)
     current_user.mfa_secret = secret
     current_user.mfa_enabled = False
     await db.commit()
@@ -248,11 +315,7 @@ async def verify_mfa_setup(
     current_user: UserModel = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """
-    Paso 2 de activación MFA:
-    Valida el código TOTP de 6 dígitos introducido por el usuario.
-    Si coincide, activa permanentemente 'mfa_enabled = True'.
-    """
+    """Paso 2 de activación MFA: Confirma el primer código TOTP."""
     if not current_user.mfa_secret:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -280,14 +343,10 @@ async def verify_mfa_setup(
 async def mfa_challenge(
     payload: MFAChallengeRequest,
     request: Request,
+    response: Response,
     db: AsyncSession = Depends(get_db),
 ):
-    """
-    Paso 2 de Login para cuentas con MFA:
-    Recibe el token temporal 'mfa_token' (scope mfa_pending) y el código TOTP de 6 dígitos.
-    Si el código es correcto, emite los tokens definitivos (Access + Refresh Token con RTR).
-    """
-    # 1. Validar mfa_token
+    """Paso 2 de Login para cuentas con MFA."""
     try:
         claims = decode_token(payload.mfa_token)
         if claims.get("scope") != "mfa_pending" or claims.get("type") != "mfa_challenge":
@@ -306,7 +365,6 @@ async def mfa_challenge(
             headers={"WWW-Authenticate": "Bearer"},
         )
 
-    # 2. Consultar usuario
     query = select(UserModel).where(UserModel.id == user_id)
     result = await db.execute(query)
     user = result.scalar_one_or_none()
@@ -317,7 +375,6 @@ async def mfa_challenge(
             detail="El usuario no tiene una configuración MFA activa o está inactivo.",
         )
 
-    # 3. Validar código TOTP en tiempo constante
     if not verify_totp(user.mfa_secret, payload.code):
         logger.warning(f"[MFA] Código TOTP fallido para usuario {user.id}")
         raise HTTPException(
@@ -325,20 +382,22 @@ async def mfa_challenge(
             detail="Código de autenticación TOTP incorrecto o expirado.",
         )
 
-    # 4. Éxito: Crear sesión y rotación
     client_ip = get_client_ip(request)
     user_agent = request.headers.get("user-agent")
 
     access_token, refresh_token = await AuthService.create_user_session(
         db, user, client_ip=client_ip, user_agent=user_agent
     )
-    user_response = _build_user_response(user)
+    csrf_token = generate_csrf_token()
+    _set_auth_cookies(response, refresh_token, csrf_token)
 
+    user_response = _build_user_response(user)
     logger.info(f"Desafío MFA superado con éxito por usuario {user.id}")
 
     return LoginResponse(
         access_token=access_token,
         refresh_token=refresh_token,
+        csrf_token=csrf_token,
         token_type="bearer",
         user=user_response,
     )
@@ -350,31 +409,25 @@ async def disable_mfa(
     current_user: UserModel = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """
-    Desactivación de MFA:
-    Requiere obligatoriamente la contraseña actual del usuario y el código TOTP vigente.
-    """
+    """Desactivación de MFA requiriendo contraseña y código vigente."""
     if not current_user.mfa_enabled:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="La autenticación multifactor no está activa en esta cuenta.",
         )
 
-    # 1. Validar contraseña
     if not verify_password(payload.password, current_user.hashed_password):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Contraseña incorrecta.",
         )
 
-    # 2. Validar código TOTP
     if not verify_totp(current_user.mfa_secret, payload.code):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Código TOTP incorrecto.",
         )
 
-    # 3. Desactivar
     current_user.mfa_enabled = False
     current_user.mfa_secret = None
     await db.commit()
