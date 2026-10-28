@@ -14,6 +14,9 @@ from app.modules.users.models import User
 # FASE 2: Modelo de persistencia y rotación de tokens
 from app.modules.auth.models import RefreshToken
 
+# FASE 4: Modelo de bitácora de auditoría médica inmutable
+from app.modules.audit.models import MedicalAuditLog
+
 # Importaciones directas
 from app.modules.patients.models import Patient
 from app.modules.appointments.models import Appointment

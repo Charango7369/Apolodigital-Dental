@@ -28,6 +28,9 @@ class Settings(BaseSettings):
     JWT_SECRET: str
     JWT_REFRESH_SECRET: str
 
+    # FASE 4: Cifrado autenticado AES-256-GCM para datos médicos protegidos (PHI)
+    PHIE_ENCRYPTION_KEY: str = ""
+
     # FASE 2: Tokens de corta duración (15 min) y rotación RTR (7 días)
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 15
     REFRESH_TOKEN_EXPIRE_DAYS: int = 7

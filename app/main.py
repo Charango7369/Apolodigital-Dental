@@ -29,6 +29,7 @@ from app.modules.reports.router import router as reports_router
 from app.modules.files.router import router as files_router
 from app.modules.tenants.router import router as tenants_router
 from app.modules.tenants.staff_router import router as clinics_staff_router, tenants_staff_router
+from app.modules.audit.router import router as audit_router
 from app.modules.health.router import router as health_router
 from app.modules.dashboard.router import router as dashboard_router
 
@@ -90,6 +91,7 @@ app.include_router(odontogram_router)
 app.include_router(notifications_router)
 app.include_router(reports_router)
 app.include_router(files_router)
+app.include_router(audit_router)
 app.include_router(health_router)
 app.include_router(dashboard_router)
 

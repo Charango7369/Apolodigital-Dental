@@ -1,14 +1,16 @@
-# app/modules/odontograms/router.py
+# app/modules/odontogram/router.py
 import logging
 from datetime import datetime, timezone
 from uuid import UUID
 from typing import List
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request, status
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 
 from app.db.session import get_db
+from app.core.audit import record_medical_audit_event
+from app.core.rate_limiter import get_client_ip
 from app.modules.odontogram.models import Odontogram as OdontogramModel
 from app.modules.odontogram.schemas import OdontogramCreate, OdontogramUpdate, OdontogramResponse
 from app.modules.auth.dependencies import get_current_user, require_role
@@ -22,10 +24,12 @@ router = APIRouter(prefix="/odontograms", tags=["Odontograms"])
 require_doctor_or_admin = require_role(["DOCTOR", "ADMIN"])
 
 
-# ➕ 1. REGISTRAR EVOLUCIÓN DE ODONTOGRAMA (Requiere DOCTOR o ADMIN + Anti-BOLA)
+# ➕ 1. REGISTRAR EVOLUCIÓN DE ODONTOGRAMA (Cifrado AES-256-GCM + Anti-BOLA + Auditoría HIPAA)
 @router.post("/", response_model=OdontogramResponse, status_code=status.HTTP_201_CREATED)
 async def create_odontogram(
     payload: OdontogramCreate,
+    request: Request,
+    background_tasks: BackgroundTasks,
     db: AsyncSession = Depends(get_db),
     current_user: UserModel = Depends(require_doctor_or_admin)
 ):
@@ -45,16 +49,14 @@ async def create_odontogram(
                 detail="Paciente no encontrado en esta clínica."
             )
 
-        # Mapeamos los sub-esquemas de Pydantic a un diccionario puro para Postgres JSONB
         serializable_teeth = {tooth: condition.model_dump() for tooth, condition in payload.teeth_data.items()}
 
         new_odontogram = OdontogramModel(
             patient_id=payload.patient_id,
             description=payload.description,
-            teeth_data=serializable_teeth
+            teeth_data=serializable_teeth  # Se cifra automáticamente vía EncryptedJSON TypeDecorator
         )
 
-        # Inyección forzada del contexto de seguridad
         new_odontogram.tenant_id = current_user.tenant_id
         new_odontogram.doctor_id = current_user.id
         new_odontogram.created_by = current_user.id
@@ -65,6 +67,21 @@ async def create_odontogram(
         db.add(new_odontogram)
         await db.commit()
         await db.refresh(new_odontogram)
+
+        # 📋 AUDITORÍA MÉDICA ASÍNCRONA (HIPAA / GDPR)
+        background_tasks.add_task(
+            record_medical_audit_event,
+            user_id=current_user.id,
+            tenant_id=current_user.tenant_id,
+            action="CREATE",
+            resource_type="ODONTOGRAM",
+            resource_id=new_odontogram.id,
+            patient_id=new_odontogram.patient_id,
+            ip_address=get_client_ip(request),
+            user_agent=request.headers.get("user-agent"),
+            details={"teeth_affected_count": len(serializable_teeth)}
+        )
+
         return new_odontogram
 
     except HTTPException:
@@ -79,10 +96,12 @@ async def create_odontogram(
         )
 
 
-# 🔍 2. CONSULTAR HISTORIAL DE ODONTOGRAMAS DE UN PACIENTE (Aislamiento Multi-Tenant)
+# 🔍 2. CONSULTAR HISTORIAL DE ODONTOGRAMAS DE UN PACIENTE
 @router.get("/patient/{patient_id}", response_model=List[OdontogramResponse])
 async def get_patient_odontograms(
     patient_id: UUID,
+    request: Request,
+    background_tasks: BackgroundTasks,
     db: AsyncSession = Depends(get_db),
     current_user: UserModel = Depends(get_current_user)
 ):
@@ -99,21 +118,74 @@ async def get_patient_odontograms(
             detail="Paciente no encontrado en esta clínica."
         )
 
-    # Forzar filtro estricto por tenant_id
     query = select(OdontogramModel).where(
         OdontogramModel.patient_id == patient_id,
         OdontogramModel.tenant_id == current_user.tenant_id
     ).order_by(OdontogramModel.created_at.desc())
 
     result = await db.execute(query)
-    return result.scalars().all()
+    records = result.scalars().all()
+
+    # 📋 AUDITORÍA MÉDICA ASÍNCRONA
+    background_tasks.add_task(
+        record_medical_audit_event,
+        user_id=current_user.id,
+        tenant_id=current_user.tenant_id,
+        action="READ",
+        resource_type="ODONTOGRAM_HISTORY",
+        patient_id=patient_id,
+        ip_address=get_client_ip(request),
+        user_agent=request.headers.get("user-agent"),
+        details={"records_retrieved": len(records)}
+    )
+
+    return records
 
 
-# ✏️ 3. EDITAR NOTAS DE UNA EVOLUCIÓN YA GUARDADA (Requiere DOCTOR o ADMIN)
+# 🔍 3. CONSULTAR ODONTOGRAMA ESPECÍFICO POR ID
+@router.get("/{odontogram_id}", response_model=OdontogramResponse)
+async def get_odontogram_by_id(
+    odontogram_id: UUID,
+    request: Request,
+    background_tasks: BackgroundTasks,
+    db: AsyncSession = Depends(get_db),
+    current_user: UserModel = Depends(get_current_user)
+):
+    query = select(OdontogramModel).where(
+        OdontogramModel.id == odontogram_id,
+        OdontogramModel.tenant_id == current_user.tenant_id
+    )
+    result = await db.execute(query)
+    record = result.scalar_one_or_none()
+
+    if not record:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Registro de odontograma no encontrado en esta clínica."
+        )
+
+    background_tasks.add_task(
+        record_medical_audit_event,
+        user_id=current_user.id,
+        tenant_id=current_user.tenant_id,
+        action="READ",
+        resource_type="ODONTOGRAM",
+        resource_id=record.id,
+        patient_id=record.patient_id,
+        ip_address=get_client_ip(request),
+        user_agent=request.headers.get("user-agent"),
+    )
+
+    return record
+
+
+# ✏️ 4. EDITAR NOTAS DE UNA EVOLUCIÓN (Requiere DOCTOR o ADMIN)
 @router.patch("/{odontogram_id}", response_model=OdontogramResponse)
 async def update_odontogram_notes(
     odontogram_id: UUID,
     payload: OdontogramUpdate,
+    request: Request,
+    background_tasks: BackgroundTasks,
     db: AsyncSession = Depends(get_db),
     current_user: UserModel = Depends(require_doctor_or_admin)
 ):
@@ -139,6 +211,20 @@ async def update_odontogram_notes(
     try:
         await db.commit()
         await db.refresh(record)
+
+        background_tasks.add_task(
+            record_medical_audit_event,
+            user_id=current_user.id,
+            tenant_id=current_user.tenant_id,
+            action="UPDATE",
+            resource_type="ODONTOGRAM",
+            resource_id=record.id,
+            patient_id=record.patient_id,
+            ip_address=get_client_ip(request),
+            user_agent=request.headers.get("user-agent"),
+            details={"updated_fields": list(update_data.keys())}
+        )
+
         return record
     except Exception as e:
         await db.rollback()
