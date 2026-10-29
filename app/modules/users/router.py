@@ -36,7 +36,9 @@ async def get_my_clinic_users(
         UserModel.tenant_id == current_user.tenant_id
     ).order_by(UserModel.created_at.desc() if hasattr(UserModel, "created_at") else UserModel.id)
     result = await db.execute(query)
-    return result.scalars().all()
+    users = result.scalars().all()
+    # 🛡️ Seguridad Multi-Tenant: Excluir Superadmin de la plataforma del personal visible de la clínica
+    return [u for u in users if "SUPER_ADMIN" not in (u.roles or [])]
 
 
 # ➕ 2. CREAR UN NUEVO MIEMBRO DEL EQUIPO (siempre dentro de MI clínica)
@@ -99,6 +101,13 @@ async def update_user(
 
     if not target_user:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Usuario no encontrado en esta clínica.")
+
+    # 🛡️ Protección de SuperAdmin: No se puede modificar un SUPER_ADMIN a través de la API de clínica
+    if "SUPER_ADMIN" in (target_user.roles or []):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="No tienes permiso para modificar las credenciales de un Administrador de la Plataforma."
+        )
 
     update_data = payload.model_dump(exclude_unset=True)
 
